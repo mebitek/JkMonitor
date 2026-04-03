@@ -410,6 +410,7 @@ def main():
             "/TimeToGo": {"initial": 0},
             "/ConsumedAmphours": {"initial": 0},
             "/Dc/0/Temperature": {"initial": 0},
+            "/Settings/HasTemperature": {"initial": 1},
 
             "/Settings/MonitorMode": {"initial": 0},
             "/Alarms/LowSoc": {"initial": 0},
