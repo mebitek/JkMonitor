@@ -1,4 +1,4 @@
-# venus.JK Monitor v1.0.1
+# venus.JK Monitor v1.0.0
 Service to integrate a jk bms  into cerbos gui
 
 The script has been developed with my current RV setup in mind.
@@ -13,6 +13,7 @@ you need to install via pip the `aiobmsble`
     see `config.ini` and amend for your needs.
     - `Name`: jk bms name
     - `Serial`: device serial 
+    - `Model`: jk bms model
     - `Interval`: interval to query the jk bms
     - `BatteryCapacity`: battery capacity in ah
     - `debug`: set log level to debug
