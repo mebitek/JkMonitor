@@ -1,0 +1,10 @@
+v1.0.1:
+    add fix quantize power for reporterted power under 5w
+v1.0.0:
+    simulate bmv-712
+    use battery capacity
+    dynamic battery capacity calcualtion based on current voltage
+    calcualte time to go
+    calculate consumed aH
+v0.1:
+    initial release
