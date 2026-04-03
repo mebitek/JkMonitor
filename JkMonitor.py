@@ -159,7 +159,7 @@ class JkMonitorService:
                         logger.info("Updating BMS data...")
                         data: BMSSample = await bms.async_update()
 
-                        self.jk.soc = data['cycle_charge']
+                        self.jk.soc = (data['cycle_charge']*100)/self.config.get_battery_capacity()
                         self.jk.voltage = data['voltage']
                         self.jk.current = data['current']
                         self.jk.power = data['power']
@@ -186,6 +186,7 @@ class JkMonitorService:
                 self._dbusservice["/Dc/0/Current"] = self.jk.current
                 time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
                 self._dbusservice["/TimeToGo"] = time_to_go
+                self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
 
                 consumed = capacityAh * (100 - self.jk.soc) / 100
                 self._dbusservice["/ConsumedAmphours"] = consumed
@@ -408,6 +409,7 @@ def main():
             "/Capacity": {"initial": config.get_battery_capacity()},
             "/TimeToGo": {"initial": 0},
             "/ConsumedAmphours": {"initial": 0},
+            "/Dc/0/Temperature": {"initial": 0},
 
             "/Settings/MonitorMode": {"initial": 0},
             "/Alarms/LowSoc": {"initial": 0},
