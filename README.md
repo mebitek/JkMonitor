@@ -21,7 +21,7 @@ you need to install via pip the `aiobmsble`
 ### Installation
 * #### prerequisites
 
-    1. install pip and bluetti-bt-lib on venus os:
+    1. install pip and aiobmsble on venus os:
         - `opkg update`
         - `opkg install python3-pip`
         - `pip3 install aiobmsble`
