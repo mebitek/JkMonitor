@@ -137,13 +137,19 @@ class JkMonitorService:
 
         try:
 
-            if self.jk.missing_updates > 20:
-                self._dbusservice["/Alarms/InternalFailure"] = 2
-                self.reset_usb_bluetooth()
+            dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
+            if self.bluetti.missing_updates > 20:
+                
+                alarm_state = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
+                if alarm_state.get_value() != 2:
+                    self._dbusservice["/Alarms/InternalFailure"] = 2
+                self.restart_ble_hardware_and_bluez_driver()
 
-            if self.jk.missing_updates > 10:
+            elif self.bluetti.missing_updates > 10:
+                alarm_state = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
                 #reset bluettoth
-                self._dbusservice["/Alarms/InternalFailure"] = 1
+                if alarm_state != 1:
+                    self._dbusservice["/Alarms/InternalFailure"] = 1
                 #self.restart_ble_hardware_and_bluez_driver()
                 self.restart_bluetooth_service()
                 logging.debug("missing upodates > 10 - need bluetooth restart?")
@@ -151,8 +157,6 @@ class JkMonitorService:
 
             if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(
                     minutes=self.config.get_interval()):
-
-                dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
 
                 try:
                     async with BMS(ble_device=self.jk.device) as bms:
@@ -292,6 +296,15 @@ class JkMonitorService:
     def restart_bluetooth_service(self):
         logging.warning("*** Tentativo riavvio demone Bluetooth ***")
         try:
+            # 1. Killiamo eventuali processi bluetti rimasti appesi ( zombie )
+            # Questo è importante perché potrebbero trattenere il socket
+            subprocess.run(['pkill', 'unblock', 'all'], timeout=5)
+
+            sleep(5)
+
+            subprocess.run(['hciconfig','hci0', 'reset'], timeout=5)
+
+            sleep(5)
             
             # 2. Riavviamo il servizio bluetooth usando systemctl
             # Venus OS su RPi usa systemd
@@ -300,7 +313,7 @@ class JkMonitorService:
             if result.returncode == 0:
                 logging.info("Servizio Bluetooth riavviato con successo.")
                 # Diamo un attimo al driver per reinsediarsi
-                time.sleep(3)
+                sleep(3)
                 return True
             else:
                 logging.error(f"Errore systemctl: {result.stderr}")
@@ -308,74 +321,6 @@ class JkMonitorService:
                 
         except Exception as e:
             logging.exception(f"Eccezione durante riavvio bluetooth: {e}")
-            return False
-
-    def reset_usb_bluetooth(self):
-        """
-        Trova il dispositivo Bluetooth e resetta la porta USB ad esso associata.
-        Funziona solo se il Bluetooth è su bus USB (es. Dongle o Pi interno).
-        """
-        logging.warning("*** Tentativo reset fisico USB Bluetooth ***")
-        try:
-            # Trova il path del dispositivo Bluetooth (es. /sys/devices/.../hci0)
-            # Questo comando cerca "hci0" nel filesystem di sistema
-            hci_path = "/sys/class/bluetooth/hci0"
-            
-            if os.path.exists(hci_path):
-                # Risali l'albero delle directory per trovare la porta USB
-                # Il path tipico è /sys/devices/.../usbX/.../hci0
-                
-                # Dobbiamo trovare la directory del "device" padre
-                device_link = os.path.realpath(os.path.join(hci_path, "device"))
-                
-                # Cerca il file 'authorized' per disabilitare/abilitare la porta
-                # Spesso bisogna andare su un livello specifico a seconda del driver
-                # Proviamo a scrivere su 'authorized' nella root del device USB
-                
-                # Logica semplificata: cerchiamo una cartella driver per fare un bind/unbind
-                # Questo è più complesso da fare in modo generico via codice.
-                
-                # Metodo alternativo più semplice: usiamo un tool esterno come 'uhubctl' se installato
-                # oppure facciamo un ciclo di autorizzazione
-                
-                # Hack veloce e sporco: scriviamo 0 e poi 1 nel file authorized del device
-                # Questo spegne e riaccende la periferica a livello hardware
-                
-                # Risaliamo fino a trovare 'authorized'
-                search_path = device_link
-                authorized_path = None
-                
-                # Loop per risalire l'albero (massimo 5 livelli)
-                for _ in range(5):
-                    auth_file = os.path.join(search_path, "authorized")
-                    if os.path.exists(auth_file):
-                        authorized_path = auth_file
-                        break
-                    search_path = os.path.dirname(search_path)
-                    if search_path == "/":
-                        break
-                
-                if authorized_path:
-                    logging.info(f"Trovato controllo autorizzazione: {authorized_path}")
-                    # Disabilita
-                    with open(authorized_path, 'w') as f:
-                        f.write('0')
-                    time.sleep(2)
-                    # Abilita
-                    with open(authorized_path, 'w') as f:
-                        f.write('1')
-                    logging.info("Reset USB fisico eseguito.")
-                    time.sleep(5) # Tempo per reinsediamento
-                    return True
-                else:
-                    logging.error("Impossibile trovare file 'authorized' per reset USB.")
-                    return False
-            else:
-                logging.error("hci0 non trovato, Bluetooth non presente.")
-                return False
-
-        except Exception as e:
-            logging.exception(f"Errore reset USB: {e}")
             return False
         
 
