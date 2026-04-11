@@ -143,6 +143,7 @@ class JkMonitorService:
 
 
     async def _async_update_logic(self):
+        target_name = self.config.get_device_name()
         # 1. Cerca il dispositivo se non lo abbiamo ancora
         if self.jk.device is None:
             logging.info(f"Ricerca BMS con nome: '{target_name}'...")
