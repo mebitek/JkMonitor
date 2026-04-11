@@ -145,8 +145,8 @@ class JkMonitorService:
     async def _async_update_logic(self):
         # 1. Cerca il dispositivo se non lo abbiamo ancora
         if self.jk.device is None:
-            logging.debug("Searching for device: %s", self.config.get_device_name())
-            device = await BleakScanner.find_device_by_name(self.config.get_device_name())
+            logging.info("Searching for device: %s", self.config.get_device_name())
+            device = await BleakScanner.find_device_by_address(self.config.get_device_name())
             if device:
                 self.jk.device = device
                 logging.info("Found device: %s", device.address)
