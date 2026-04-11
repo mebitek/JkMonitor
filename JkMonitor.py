@@ -198,7 +198,7 @@ class JkMonitorService:
 
                     # Update DBus
                     self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
-                    self._dbusservice["/Dc/0/Power"] = -self.jk.power
+                    self._dbusservice["/Dc/0/Power"] = self.jk.power
                     self._dbusservice["/Dc/0/Current"] = self.jk.current
                     self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
                     self._dbusservice["/Soc"] = self.jk.soc
