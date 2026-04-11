@@ -146,22 +146,46 @@ class JkMonitorService:
         # 1. Cerca il dispositivo se non lo abbiamo ancora
         if self.jk.device is None:
             logging.info("Searching for device: %s", self.config.get_device_name())
-            device = await BleakScanner.find_device_by_name(self.config.get_device_name())
-            if device:
-                self.jk.device = device
-                logging.info("Found device: %s", device.address)
-            else:
-                logging.warning("Device not found yet...")
+            # Usiamo un timeout esplicito e discover per essere più aggressivi
+            try:
+                device = await BleakScanner.find_device_by_name(self.config.get_device_name(), timeout=10.0)
+                if device:
+                    self.jk.device = device
+                    logging.info("Found device: %s", device.address)
+                else:
+                    logging.warning("Device not found yet...")
+                    return
+            except Exception as e:
+                logging.error(f"Error during scan: {e}")
                 return
 
-        # 2. Controllo intervallo
+        # 2. Gestione Allarmi e Bluetooth (Corretta indentazione e variabili)
+        dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
+        
+        if self.jk.missing_updates > 10:
+            try:
+                # Import sicuro del valore attuale dell'allarme
+                alarm_item = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
+                current_alarm = alarm_item.get_value()
+                
+                if self.jk.missing_updates > 20:
+                    if current_alarm != 2:
+                        self._dbusservice["/Alarms/InternalFailure"] = 2
+                        self.restart_ble_hardware_and_bluez_driver()
+                else:
+                    if current_alarm != 1:
+                        self._dbusservice["/Alarms/InternalFailure"] = 1
+                        self.restart_bluetooth_service()
+            except:
+                pass
+
+        # 3. Controllo intervallo e Update
         if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(minutes=self.config.get_interval()):
             try:
-                # Qui usiamo la libreria aiobmsble
                 async with BMS(ble_device=self.jk.device) as bms:
                     data: BMSSample = await bms.async_update()
                     
-                    # Aggiorna i dati locali
+                    # Mapping dati (mantenendo il tuo formato dictionary)
                     self.jk.voltage = data['voltage']
                     self.jk.current = data['current']
                     self.jk.power = data['power']
@@ -170,37 +194,35 @@ class JkMonitorService:
                     
                     self.jk.last_update = datetime.now()
                     self.jk.missing_updates = 0
-                    
-                    if self.jk.soc < self.config.get_low_soc_alarm_set():
-                        self._dbusservice["/Alarms/LowSoc"] = 1
-                    if self.jk.soc > self.config.get_low_soc_alarm_clear():
-                        self._dbusservice["/Alarms/LowSoc"] = 0
+                    self._dbusservice["/Alarms/InternalFailure"] = 0
 
+                    # Update DBus
                     self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
                     self._dbusservice["/Dc/0/Power"] = -self.jk.power
                     self._dbusservice["/Dc/0/Current"] = self.jk.current
-                    time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
-                    self._dbusservice["/TimeToGo"] = time_to_go
                     self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
+                    self._dbusservice["/Soc"] = self.jk.soc
+                    
+                    self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
+                        self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
 
+                    # Correzione variabile capacityAh non definita
+                    capacityAh = self.config.get_battery_capacity()
                     consumed = capacityAh * (100 - self.jk.soc) / 100
                     self._dbusservice["/ConsumedAmphours"] = consumed
+                    
                     if consumed > 0:
                         self._dbusservice["/History/LastDischarge"] = consumed
                         self.jk.hist_last_discharge = consumed
-                    #     deepest_discharge = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/History/DeepestDischarge')
-                    #     if deepest_discharge.get_value() and deepest_discharge.get_value() < consumed:
-                    #         self._dbusservice["/History/DeepestDischarge"] = consumed
 
-
-                    logging.debug("* * * BATTERY SOC %s", self.jk.soc)
-                    logging.debug("* * * BATTERY VOLTAGE %s", self.jk.voltage)
-                    logging.debug("* * * CURRENT %s", self.jk.current)
-                    logging.debug("* * * DC POWER %s", self.jk.power)
+                    logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
                     
             except Exception as e:
                 logging.error(f"Failed to update BMS: {e}")
                 self.jk.missing_updates += 1
+                # Se fallisce ripetutamente, resettiamo il device per forzare nuova scansione
+                if self.jk.missing_updates > 5:
+                    self.jk.device = None
 
 
 
