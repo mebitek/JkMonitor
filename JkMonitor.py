@@ -143,24 +143,15 @@ class JkMonitorService:
 
 
     async def _async_update_logic(self):
-        target_name = self.config.get_device_name()
         # 1. Cerca il dispositivo se non lo abbiamo ancora
         if self.jk.device is None:
-            logging.info(f"Ricerca BMS con nome: '{target_name}'...")
-            
-            # Non usare find_device_by_name (è meno affidabile su RPi)
-            # Usiamo discover per vedere tutto quello che c'è intorno
-            devices = await BleakScanner.discover(timeout=10.0)
-            
-            for d in devices:
-                # Controllo sia sul nome che sul MAC (per sicurezza)
-                if d.name and target_name.upper() in d.name.upper():
-                    self.jk.device = d
-                    logging.info(f"BMS Trovato: {d.name} [{d.address}]")
-                    break
-            
-            if self.jk.device is None:
-                logging.warning(f"BMS '{target_name}' non trovato. Dispositivi visti: {[d.name for d in devices if d.name]}")
+            logging.info("Searching for device: %s", self.config.get_device_name())
+            device = await BleakScanner.find_device_by_name(self.config.get_device_name())
+            if device:
+                self.jk.device = device
+                logging.info("Found device: %s", device.address)
+            else:
+                logging.warning("Device not found yet...")
                 return
 
         # 2. Controllo intervallo
@@ -171,11 +162,11 @@ class JkMonitorService:
                     data: BMSSample = await bms.async_update()
                     
                     # Aggiorna i dati locali
-                    self.jk.voltage = data.voltage
-                    self.jk.current = data.current
-                    self.jk.power = data.power
-                    self.jk.soc = (data.cycle_charge * 100) / self.config.get_battery_capacity()
-                    self.jk.temperature = data.temperatures[0] if data.temperatures else 0
+                    self.jk.voltage = data['voltage']
+                    self.jk.current = data['current']
+                    self.jk.power = data['power']
+                    self.jk.soc = (data['cycle_charge'] * 100) / self.config.get_battery_capacity()
+                    self.jk.temperature = data['temperature']
                     
                     self.jk.last_update = datetime.now()
                     self.jk.missing_updates = 0
