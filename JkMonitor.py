@@ -189,7 +189,7 @@ class JkMonitorService:
                     self.jk.voltage = data['voltage']
                     self.jk.current = data['current']
                     self.jk.power = data['power']
-                    self.jk.soc = (data['cycle_charge'] * 100) / self.config.get_battery_capacity()
+                    self.jk.soc = data['battery_level']
                     self.jk.temperature = data['temperature']
                     
                     self.jk.last_update = datetime.now()
