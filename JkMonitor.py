@@ -292,6 +292,8 @@ class JkMonitorService:
         logging.info(f"power off exit code: {result.returncode}")
         logging.info(f"power off output: {result.stdout}")
 
+        sleep(5)
+
         result = subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, text=True)
         logging.info(f"power on exit code: {result.returncode}")
         logging.info(f"power on output: {result.stdout}")
@@ -302,17 +304,15 @@ class JkMonitorService:
         try:
             # 1. Killiamo eventuali processi bluetti rimasti appesi ( zombie )
             # Questo è importante perché potrebbero trattenere il socket
-            subprocess.run(['pkill', 'unblock', 'all'], timeout=5)
+            subprocess.run(['pkill', 'unblock'], timeout=5)
 
             sleep(5)
 
             subprocess.run(['hciconfig','hci0', 'reset'], timeout=5)
 
             sleep(5)
-            
-            # 2. Riavviamo il servizio bluetooth usando systemctl
-            # Venus OS su RPi usa systemd
-            result = subprocess.run(["systemctl", "restart", "bluetooth"], capture_output=True, text=True, timeout=15)
+
+            result = subprocess.run(['bluetoothctl','power', 'on'], timeout=5)
             
             if result.returncode == 0:
                 logging.info("Servizio Bluetooth riavviato con successo.")
