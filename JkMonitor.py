@@ -145,13 +145,21 @@ class JkMonitorService:
     async def _async_update_logic(self):
         # 1. Cerca il dispositivo se non lo abbiamo ancora
         if self.jk.device is None:
-            logging.info("Searching for device: %s", self.config.get_device_name())
-            device = await BleakScanner.find_device_by_name(self.config.get_device_name())
-            if device:
-                self.jk.device = device
-                logging.info("Found device: %s", device.address)
-            else:
-                logging.warning("Device not found yet...")
+            logging.info(f"Ricerca BMS con nome: '{target_name}'...")
+            
+            # Non usare find_device_by_name (è meno affidabile su RPi)
+            # Usiamo discover per vedere tutto quello che c'è intorno
+            devices = await BleakScanner.discover(timeout=10.0)
+            
+            for d in devices:
+                # Controllo sia sul nome che sul MAC (per sicurezza)
+                if d.name and target_name.upper() in d.name.upper():
+                    self.jk.device = d
+                    logging.info(f"BMS Trovato: {d.name} [{d.address}]")
+                    break
+            
+            if self.jk.device is None:
+                logging.warning(f"BMS '{target_name}' non trovato. Dispositivi visti: {[d.name for d in devices if d.name]}")
                 return
 
         # 2. Controllo intervallo
