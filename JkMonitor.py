@@ -135,8 +135,6 @@ class JkMonitorService:
         except Exception:
             logging.exception("Exception while getting jk bms status")
         
-        index = self._dbusservice["/UpdateIndex"] + 1
-        self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
         return True
 
 
@@ -207,6 +205,8 @@ class JkMonitorService:
                         self.jk.hist_last_discharge = consumed
 
                     logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
+                    index = self._dbusservice["/UpdateIndex"] + 1
+                    self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
                     
             except Exception as e:
                 logging.error(f"Failed to update BMS: {e}")
