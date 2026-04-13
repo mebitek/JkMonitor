@@ -71,16 +71,8 @@ class JkMonitorService:
         logging.debug("* * * MAC %s", self.jk.name)
 
         self.jk.device = None
-
-        # -------------------------------------------------------------
-        # _ble_lock: garantisce che un solo aggiornamento BLE sia attivo
-        # alla volta. acquire() con blocking=False fallisce subito se il
-        # lock è già preso, invece di accodarsi (no sovrapposizioni).
-        # -------------------------------------------------------------
         self._ble_lock = threading.Lock()
 
-        # event loop asyncio dedicato — gira in un thread daemon separato
-        # così asyncio.run() non blocca mai il thread GLib/dbus
         self._async_loop = asyncio.new_event_loop()
         self._async_thread = threading.Thread(
             target=self._run_async_loop,
@@ -136,35 +128,18 @@ class JkMonitorService:
 
         self._dbusservice.register()
 
-        # GLib timer: identico all'originale, usa get_interval() per evitare
-        # sovrapposizioni. _update ora torna immediatamente senza bloccare.
-        GLib.timeout_add(self.config.get_interval() * 1000, self._update)
+        GLib.timeout_add(self.config.get_interval() * 60 * 1000, self._update)
 
-    # ------------------------------------------------------------------
-    # Thread loop asyncio
-    # ------------------------------------------------------------------
     def _run_async_loop(self):
-        """Gira per sempre nel thread dedicato BLE."""
         asyncio.set_event_loop(self._async_loop)
         self._async_loop.run_forever()
 
-    # ------------------------------------------------------------------
-    # Callback GLib — torna SUBITO, schedula il lavoro nel thread BLE
-    # ------------------------------------------------------------------
     def _update(self):
-        """
-        Chiamato da GLib ogni get_interval() secondi.
-        Non fa lavoro diretto: schedula la coroutine nel thread asyncio
-        dedicato e torna immediatamente, lasciando GLib libero.
-        Se il lock BLE è già preso (update precedente ancora in corso)
-        salta silenziosamente questo ciclo.
-        """
+
         if not self._ble_lock.acquire(blocking=False):
-            logging.warning("BLE update già in corso, ciclo saltato.")
+            logging.warning("BLE updating, skipping....")
             return True
 
-        # run_coroutine_threadsafe è thread-safe per definizione:
-        # invia la coroutine al loop nel thread BLE senza bloccare qui.
         future = asyncio.run_coroutine_threadsafe(
             self._async_update_logic(), self._async_loop
         )
@@ -172,19 +147,14 @@ class JkMonitorService:
         return True
 
     def _on_update_done(self, future):
-        """Chiamato nel thread asyncio al termine. Rilascia il lock."""
         try:
             future.result()
         except Exception:
-            logging.exception("Eccezione non gestita nell'update BLE")
+            logging.exception("unhandled exception updating BLE")
         finally:
             self._ble_lock.release()
 
-    # ------------------------------------------------------------------
-    # Logica BLE asincrona — IDENTICA all'originale
-    # Le scritture dbus sono via GLib.idle_add() perché questo metodo
-    # gira nel thread asyncio, non nel thread GLib che possiede il bus.
-    # ------------------------------------------------------------------
+
     async def _async_update_logic(self):
         if self.jk.device is None:
             logging.info("Searching for device: %s", self.config.get_device_name())
@@ -204,9 +174,6 @@ class JkMonitorService:
                 return
 
         if self.jk.missing_updates > 10:
-            # Leggiamo il valore corrente dell'allarme direttamente dalla
-            # nostra istanza (thread-safe: è solo una lettura di un intero).
-            # Evita di aprire dbus.SystemBus() dal thread asyncio.
             current_alarm = self._dbusservice["/Alarms/InternalFailure"]
 
             if self.jk.missing_updates > 20:
@@ -242,7 +209,6 @@ class JkMonitorService:
                     if consumed > 0:
                         self.jk.hist_last_discharge = consumed
 
-                    # Tutte le scritture dbus schedulate nel thread GLib
                     GLib.idle_add(self._dbus_commit, {
                         "/Alarms/InternalFailure": 0,
                         "/Dc/0/Voltage":           self.jk.voltage,
@@ -254,7 +220,6 @@ class JkMonitorService:
                         "/ConsumedAmphours":       consumed,
                         "/History/LastDischarge":  self.jk.hist_last_discharge,
                     })
-                    # UpdateIndex richiede lettura+scrittura atomica nel thread GLib
                     GLib.idle_add(self._increment_update_index)
 
                     logging.debug(
@@ -268,29 +233,20 @@ class JkMonitorService:
                 if self.jk.missing_updates > 5:
                     self.jk.device = None
 
-    # ------------------------------------------------------------------
-    # Helper dbus — eseguiti nel thread GLib tramite idle_add
-    # ------------------------------------------------------------------
     def _dbus_set(self, path, value):
-        """Scrive un singolo path dbus. Ritorna False (one-shot idle_add)."""
         self._dbusservice[path] = value
         return False
 
     def _dbus_commit(self, values: dict):
-        """Scrive un dizionario di path dbus in un colpo solo."""
         for path, value in values.items():
             self._dbusservice[path] = value
         return False
 
     def _increment_update_index(self):
-        """Legge e incrementa UpdateIndex (0-255) in modo atomico nel thread GLib."""
         index = self._dbusservice["/UpdateIndex"] + 1
         self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
         return False
 
-    # ------------------------------------------------------------------
-    # Resto identico all'originale
-    # ------------------------------------------------------------------
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else updated %s to %s" % (path, value))
         return True
@@ -342,27 +298,20 @@ class JkMonitorService:
         return int(hours * 3600)
 
     def _get_adapter(self) -> str:
-        """
-        Ricava l'adattatore BLE usato dal device trovato.
-        Su Linux, device.details è il path DBus del device:
-          /org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF  →  hci1
-        Se non riesce a determinarlo, ritorna 'hci0' come fallback.
-        """
         try:
             if self.jk.device is not None:
                 path = self.jk.device.details.get("path", "") or str(self.jk.device.details)
                 # estrai hciN dal path DBus
                 for part in path.split("/"):
                     if part.startswith("hci"):
-                        logging.info("Adattatore BLE rilevato: %s", part)
+                        logging.info("BLE adapter found: %s", part)
                         return part
         except Exception as e:
-            logging.warning("Impossibile determinare l'adattatore BLE: %s", e)
-        logging.warning("Adattatore BLE non determinato, uso fallback hci0")
+            logging.warning("cannot find BLE adapter: %s", e)
+        logging.warning("cannot find BLE adapter, using fallback hci0")
         return "hci0"
 
     def _restart_ble_hardware_sync(self, adapter: str):
-        """Blocca il thread OS — chiamata SOLO tramite run_in_executor."""
         logging.info("*** Restarting BLE hardware on %s ***", adapter)
         for cmd, label in [
             (["bluetoothctl", "--adapter", adapter, "power", "off"], "power off"),
@@ -375,14 +324,12 @@ class JkMonitorService:
                 sleep(5)
 
     async def restart_ble_hardware_and_bluez_driver(self):
-        """Non blocca il loop asyncio: delega il lavoro a un thread OS."""
         adapter = self._get_adapter()
         await self._async_loop.run_in_executor(
             None, self._restart_ble_hardware_sync, adapter
         )
 
     def _restart_bluetooth_sync(self, adapter: str):
-        """Blocca il thread OS — chiamata SOLO tramite run_in_executor."""
         logging.warning("*** Tentativo riavvio demone Bluetooth su %s ***", adapter)
         try:
             subprocess.run(['pkill', 'unblock'], timeout=5)
@@ -391,18 +338,17 @@ class JkMonitorService:
             sleep(5)
             result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
             if result.returncode == 0:
-                logging.info("Bluetooth riavviato con successo su %s.", adapter)
+                logging.info("Bluetooth successfuly restarted for %s.", adapter)
                 sleep(3)
                 return True
             else:
-                logging.error(f"Errore riavvio Bluetooth: {result.stderr}")
+                logging.error(f"Error restarting Bluetooth: {result.stderr}")
                 return False
         except Exception as e:
-            logging.exception(f"Eccezione durante riavvio bluetooth: {e}")
+            logging.exception(f"Bluetooth restart exception: {e}")
             return False
 
     async def restart_bluetooth_service(self):
-        """Non blocca il loop asyncio: delega il lavoro a un thread OS."""
         adapter = self._get_adapter()
         await self._async_loop.run_in_executor(
             None, self._restart_bluetooth_sync, adapter
