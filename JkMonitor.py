@@ -126,7 +126,7 @@ class JkMonitorService:
             )
 
         self._dbusservice.register()
-        GLib.timeout_add(1000, self._update)
+        GLib.timeout_add(self.config.get_interval()*1000, self._update)
 
 
     def _update(self):
@@ -153,8 +153,6 @@ class JkMonitorService:
                 self.restart_ble_hardware_and_bluez_driver()
                 logging.error(f"Error during scan: {e}")
                 return
-
-        dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
         
         if self.jk.missing_updates > 10:
             try:
