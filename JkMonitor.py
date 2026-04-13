@@ -206,21 +206,21 @@ class JkMonitorService:
                 self.jk.last_update = datetime.now()
                 self.jk.missing_updates = 0
 
-                self._safe_dbus_update("/Alarms/InternalFailure", 0)
+                self._dbusservice["/Alarms/InternalFailure"] = 0
                 self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage
-                self._safe_dbus_update("/Dc/0/Power", self.jk.power)
-                self._safe_dbus_update("/Dc/0/Current", self.jk.current)
-                self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
-                self._safe_dbus_update("/Soc", self.jk.soc)                
+                self._dbusservice["/Dc/0/Power"] = self.jk.power
+                self._dbusservice["/Dc/0/Current"] = self.jk.current
+                self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
+                self._dbusservice["/Soc"] = self.jk.soc             
                 time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
-                self._safe_dbus_update("/TimeToGo", time_to_go)
+                self._dbusservice["/TimeToGo"] = time_to_go
 
                 capacityAh = self.config.get_battery_capacity()
                 consumed = capacityAh * (100 - self.jk.soc) / 100
-                self._safe_dbus_update("/ConsumedAmphours", consumed)  
+                self._dbusservice["/ConsumedAmphours"] = consumed
                 
                 if consumed > 0:
-                    self._safe_dbus_update("/History/LastDischarge", consumed)
+                    self._dbusservice["/History/LastDischarge"] = consumed
                     self.jk.hist_last_discharge = consumed
 
                 logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
@@ -242,13 +242,6 @@ class JkMonitorService:
 
                     self.jk.bms = None
                     self.jk.device = None
-
-    def _safe_dbus_update(self, path, value):
-        GLib.idle_add(self._set_dbus_value, path, value)
-
-    def _set_dbus_value(self, path, value):
-        self._dbusservice[path] = value
-        return False # Esegue una volta sola
 
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else updated %s to %s" % (path, value))
