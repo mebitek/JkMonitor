@@ -204,29 +204,19 @@ class JkMonitorService:
                 return
 
         if self.jk.missing_updates > 10:
-            try:
-                dbus_conn = (
-                    dbus.SessionBus()
-                    if 'DBUS_SESSION_BUS_ADDRESS' in os.environ
-                    else dbus.SystemBus()
-                )
-                alarm_item = VeDbusItemImport(
-                    dbus_conn,
-                    "com.victronenergy.battery.jkbms",
-                    '/Alarms/InternalFailure',
-                )
-                current_alarm = alarm_item.get_value()
+            # Leggiamo il valore corrente dell'allarme direttamente dalla
+            # nostra istanza (thread-safe: è solo una lettura di un intero).
+            # Evita di aprire dbus.SystemBus() dal thread asyncio.
+            current_alarm = self._dbusservice["/Alarms/InternalFailure"]
 
-                if self.jk.missing_updates > 20:
-                    if current_alarm != 2:
-                        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
-                        self.restart_ble_hardware_and_bluez_driver()
-                else:
-                    if current_alarm != 1:
-                        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
-                        self.restart_bluetooth_service()
-            except Exception:
-                pass
+            if self.jk.missing_updates > 20:
+                if current_alarm != 2:
+                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
+                    await self.restart_ble_hardware_and_bluez_driver()
+            else:
+                if current_alarm != 1:
+                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
+                    await self.restart_bluetooth_service()
 
         if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(
             minutes=self.config.get_interval()
@@ -351,34 +341,72 @@ class JkMonitorService:
         hours = remaining_ah / abs(current_a)
         return int(hours * 3600)
 
-    def restart_ble_hardware_and_bluez_driver(self):
-        logging.info("*** Restarting BLE hardware and Bluez driver ***")
-        result = subprocess.run(["bluetoothctl", "power", "off"], capture_output=True, text=True)
-        logging.info(f"power off exit code: {result.returncode}")
-        logging.info(f"power off output: {result.stdout}")
-        sleep(5)
-        result = subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, text=True)
-        logging.info(f"power on exit code: {result.returncode}")
-        logging.info(f"power on output: {result.stdout}")
+    def _get_adapter(self) -> str:
+        """
+        Ricava l'adattatore BLE usato dal device trovato.
+        Su Linux, device.details è il path DBus del device:
+          /org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF  →  hci1
+        Se non riesce a determinarlo, ritorna 'hci0' come fallback.
+        """
+        try:
+            if self.jk.device is not None:
+                path = self.jk.device.details.get("path", "") or str(self.jk.device.details)
+                # estrai hciN dal path DBus
+                for part in path.split("/"):
+                    if part.startswith("hci"):
+                        logging.info("Adattatore BLE rilevato: %s", part)
+                        return part
+        except Exception as e:
+            logging.warning("Impossibile determinare l'adattatore BLE: %s", e)
+        logging.warning("Adattatore BLE non determinato, uso fallback hci0")
+        return "hci0"
 
-    def restart_bluetooth_service(self):
-        logging.warning("*** Tentativo riavvio demone Bluetooth ***")
+    def _restart_ble_hardware_sync(self, adapter: str):
+        """Blocca il thread OS — chiamata SOLO tramite run_in_executor."""
+        logging.info("*** Restarting BLE hardware on %s ***", adapter)
+        for cmd, label in [
+            (["bluetoothctl", "--adapter", adapter, "power", "off"], "power off"),
+            (["bluetoothctl", "--adapter", adapter, "power", "on"],  "power on"),
+        ]:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            logging.info(f"{label} exit code: {result.returncode}")
+            logging.info(f"{label} output: {result.stdout}")
+            if label == "power off":
+                sleep(5)
+
+    async def restart_ble_hardware_and_bluez_driver(self):
+        """Non blocca il loop asyncio: delega il lavoro a un thread OS."""
+        adapter = self._get_adapter()
+        await self._async_loop.run_in_executor(
+            None, self._restart_ble_hardware_sync, adapter
+        )
+
+    def _restart_bluetooth_sync(self, adapter: str):
+        """Blocca il thread OS — chiamata SOLO tramite run_in_executor."""
+        logging.warning("*** Tentativo riavvio demone Bluetooth su %s ***", adapter)
         try:
             subprocess.run(['pkill', 'unblock'], timeout=5)
             sleep(5)
-            subprocess.run(['hciconfig', 'hci0', 'reset'], timeout=5)
+            subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
             sleep(5)
-            result = subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
+            result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
             if result.returncode == 0:
-                logging.info("Servizio Bluetooth riavviato con successo.")
+                logging.info("Bluetooth riavviato con successo su %s.", adapter)
                 sleep(3)
                 return True
             else:
-                logging.error(f"Errore systemctl: {result.stderr}")
+                logging.error(f"Errore riavvio Bluetooth: {result.stderr}")
                 return False
         except Exception as e:
             logging.exception(f"Eccezione durante riavvio bluetooth: {e}")
             return False
+
+    async def restart_bluetooth_service(self):
+        """Non blocca il loop asyncio: delega il lavoro a un thread OS."""
+        adapter = self._get_adapter()
+        await self._async_loop.run_in_executor(
+            None, self._restart_bluetooth_sync, adapter
+        )
 
 
 def main():
