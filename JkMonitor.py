@@ -177,54 +177,13 @@ class JkMonitorService:
                 async with BMS(ble_device=self.jk.device) as bms:
                     data: BMSSample = await bms.async_update()
                     
-                    now = datetime.now()
-                    raw_current = data['current']
                     self.jk.voltage = data['voltage']
+                    self.jk.current = data['current']
+                    self.jk.power = data['power']
+                    self.jk.soc = data['battery_level']
                     self.jk.temperature = data['temperature']
                     
-                    # --- LOGICA CORREZIONE CORRENTE E SOC (OFFSET E COULOMB COUNTING) ---
-                    # 1. Determiniamo la corrente reale da usare
-                    # Se Orion sta caricando (corrente positiva sopra i 2A)
-                    if raw_current > 2.0:
-                        current_to_use = raw_current
-                        # Sincronizziamo il SOC manuale con quello del BMS durante la carica forte
-                        self.manual_soc = float(data['battery_level'])
-                    else:
-                        # Se siamo in scarica o idling e il JK è nella zona d'ombra (sotto 0.7A)
-                        if abs(raw_current) < 0.7:
-                            # Applichiamo l'offset stimato per i servizi (0.6A con jitter)
-                            current_to_use = -0.6 * random.uniform(0.95, 1.05)
-                        else:
-                            # Carico pesante visto dal BMS (es. Inverter o frigo in spunto)
-                            current_to_use = raw_current
-
-                    # 2. Ricalcolo SOC software
-                    if self.manual_soc is None:
-                        self.manual_soc = float(data['battery_level'])
-                    
-                    # Calcolo intervallo temporale
-                    if hasattr(self, 'last_soc_update_time'):
-                        delta_t_h = (now - self.last_soc_update_time).total_seconds() / 3600.0
-                        capacity_ah = self.config.get_battery_capacity()
-                        
-                        # Variazione percentuale: (Ampere * Ore / Capacità Totale) * 100
-                        delta_soc = (current_to_use * delta_t_h / capacity_ah) * 100
-                        
-                        # Aggiorniamo il SOC solo se non siamo in carica (perché in carica abbiamo già sincronizzato sopra)
-                        if raw_current <= 2.0:
-                            self.manual_soc += delta_soc
-                        
-                        # Clamp di sicurezza
-                        self.manual_soc = max(0.0, min(100.0, self.manual_soc))
-
-                    self.last_soc_update_time = now
-                    # -------------------------------------------------------------------
-
-                    self.jk.current = current_to_use
-                    self.jk.power = self.jk.voltage * self.jk.current
-                    self.jk.soc = self.manual_soc
-                    
-                    self.jk.last_update = now
+                    self.jk.last_update = datetime.now()
                     self.jk.missing_updates = 0
                     self._dbusservice["/Alarms/InternalFailure"] = 0
 
@@ -232,7 +191,7 @@ class JkMonitorService:
                     self._dbusservice["/Dc/0/Power"] = self.jk.power
                     self._dbusservice["/Dc/0/Current"] = self.jk.current
                     self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
-                    self._dbusservice["/Soc"] = round(self.jk.soc, 2)
+                    self._dbusservice["/Soc"] = self.jk.soc
                     
                     self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
                         self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
@@ -245,9 +204,7 @@ class JkMonitorService:
                         self._dbusservice["/History/LastDischarge"] = consumed
                         self.jk.hist_last_discharge = consumed
 
-                    logging.debug("BATTERY UPDATED: SOC %s (manual), V %s, I %s", 
-                                  round(self.jk.soc, 2), self.jk.voltage, round(self.jk.current, 3))
-                    
+                    logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
                     index = self._dbusservice["/UpdateIndex"] + 1
                     self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
                     
