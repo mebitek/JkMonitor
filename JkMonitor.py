@@ -6,11 +6,8 @@ Created by mebitek in 2026.
 Inspired by:
  - https://github.com/victronenergy/velib_python/blob/master/dbusdummyservice.py (Template)
 
-
-This code and its documentation can be found on: https://github.com/mebitek/JkMonitor
-Used https://github.com/victronenergy/velib_python/blob/master/dbusdummyservice.py as basis for this service.
-Reading information from jk  bms bluetooth via aiobmsble librasries and puts the info on dbus as battery.
-
+https://github.com/mebitek/JkMonitor
+Reading information from JK BMS bluetooth via aiobmsble libraries and puts the info on dbus as battery.
 """
 
 import os
@@ -18,24 +15,22 @@ import sys
 import json
 import dbus
 import _thread as thread
+import threading
 import subprocess
 from datetime import datetime, timedelta
 import utils
-import random
 from time import sleep
 
 import asyncio
 import logging
-from typing import Final
 
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
 from aiobmsble import BMSSample
-from aiobmsble.bms.jikong_bms import BMS 
+from aiobmsble.bms.jikong_bms import BMS
 
-# add the path to our own packages for import
 sys.path.insert(1, "/data/SetupHelper/velib_python")
 
 from vedbus import VeDbusService, VeDbusItemImport
@@ -59,6 +54,7 @@ class JkBms:
         self.missing_updates = 0
         self.device = None
 
+
 class JkMonitorService:
     def __init__(
         self,
@@ -69,35 +65,50 @@ class JkMonitorService:
         connection="Bluetooth",
         config=None,
     ):
-
         self.config = config or JkConfig()
 
-        # jk class
         self.jk = JkBms(config.get_device_name(), 0, 12.8, 0, 0, 0)
         logging.debug("* * * MAC %s", self.jk.name)
 
         self.jk.device = None
 
+        # -------------------------------------------------------------
+        # _ble_lock: garantisce che un solo aggiornamento BLE sia attivo
+        # alla volta. acquire() con blocking=False fallisce subito se il
+        # lock è già preso, invece di accodarsi (no sovrapposizioni).
+        # -------------------------------------------------------------
+        self._ble_lock = threading.Lock()
+
+        # event loop asyncio dedicato — gira in un thread daemon separato
+        # così asyncio.run() non blocca mai il thread GLib/dbus
+        self._async_loop = asyncio.new_event_loop()
+        self._async_thread = threading.Thread(
+            target=self._run_async_loop,
+            daemon=True,
+            name="jk-ble-loop",
+        )
+        self._async_thread.start()
 
         # dbus service
         self._dbusservice = VeDbusService(servicename, register=False)
         self._paths = paths
 
-        vregtype = lambda *args, **kwargs: VregLinkItem(*args, **kwargs, getvreg=self.vreg_link_get, setvreg=self.vreg_link_set)
+        vregtype = lambda *args, **kwargs: VregLinkItem(
+            *args, **kwargs,
+            getvreg=self.vreg_link_get,
+            setvreg=self.vreg_link_set,
+        )
 
         logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
 
         productname = "Jk BMS " + config.get_model()
         logging.debug("* * * Product name is %s", productname)
 
-        # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path("/Mgmt/ProcessName", __file__)
         self._dbusservice.add_path("/Mgmt/ProcessVersion", config.get_version())
         self._dbusservice.add_path("/Mgmt/Connection", connection)
 
-        # Create the mandatory objects
         self._dbusservice.add_path("/DeviceInstance", deviceinstance)
-        # value used in ac_sensor_bridge.cpp of dbus-cgwacs
         self._dbusservice.add_path("/ProductId", 0xA383)
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/DeviceName", productname)
@@ -124,23 +135,63 @@ class JkMonitorService:
             )
 
         self._dbusservice.register()
-        GLib.timeout_add(self.config.get_interval()*1000, self._update)
 
+        # GLib timer: identico all'originale, usa get_interval() per evitare
+        # sovrapposizioni. _update ora torna immediatamente senza bloccare.
+        GLib.timeout_add(self.config.get_interval() * 1000, self._update)
 
+    # ------------------------------------------------------------------
+    # Thread loop asyncio
+    # ------------------------------------------------------------------
+    def _run_async_loop(self):
+        """Gira per sempre nel thread dedicato BLE."""
+        asyncio.set_event_loop(self._async_loop)
+        self._async_loop.run_forever()
+
+    # ------------------------------------------------------------------
+    # Callback GLib — torna SUBITO, schedula il lavoro nel thread BLE
+    # ------------------------------------------------------------------
     def _update(self):
-        try:
-            asyncio.run(self._async_update_logic())
-        except Exception:
-            logging.exception("Exception while getting jk bms status")
-        
+        """
+        Chiamato da GLib ogni get_interval() secondi.
+        Non fa lavoro diretto: schedula la coroutine nel thread asyncio
+        dedicato e torna immediatamente, lasciando GLib libero.
+        Se il lock BLE è già preso (update precedente ancora in corso)
+        salta silenziosamente questo ciclo.
+        """
+        if not self._ble_lock.acquire(blocking=False):
+            logging.warning("BLE update già in corso, ciclo saltato.")
+            return True
+
+        # run_coroutine_threadsafe è thread-safe per definizione:
+        # invia la coroutine al loop nel thread BLE senza bloccare qui.
+        future = asyncio.run_coroutine_threadsafe(
+            self._async_update_logic(), self._async_loop
+        )
+        future.add_done_callback(self._on_update_done)
         return True
 
+    def _on_update_done(self, future):
+        """Chiamato nel thread asyncio al termine. Rilascia il lock."""
+        try:
+            future.result()
+        except Exception:
+            logging.exception("Eccezione non gestita nell'update BLE")
+        finally:
+            self._ble_lock.release()
 
+    # ------------------------------------------------------------------
+    # Logica BLE asincrona — IDENTICA all'originale
+    # Le scritture dbus sono via GLib.idle_add() perché questo metodo
+    # gira nel thread asyncio, non nel thread GLib che possiede il bus.
+    # ------------------------------------------------------------------
     async def _async_update_logic(self):
         if self.jk.device is None:
             logging.info("Searching for device: %s", self.config.get_device_name())
             try:
-                device = await BleakScanner.find_device_by_name(self.config.get_device_name(), timeout=10.0)
+                device = await BleakScanner.find_device_by_name(
+                    self.config.get_device_name(), timeout=10.0
+                )
                 if device:
                     self.jk.device = device
                     logging.info("Found device: %s", device.address)
@@ -151,70 +202,108 @@ class JkMonitorService:
                 self.restart_ble_hardware_and_bluez_driver()
                 logging.error(f"Error during scan: {e}")
                 return
-        
+
         if self.jk.missing_updates > 10:
             try:
-                alarm_item = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
+                dbus_conn = (
+                    dbus.SessionBus()
+                    if 'DBUS_SESSION_BUS_ADDRESS' in os.environ
+                    else dbus.SystemBus()
+                )
+                alarm_item = VeDbusItemImport(
+                    dbus_conn,
+                    "com.victronenergy.battery.jkbms",
+                    '/Alarms/InternalFailure',
+                )
                 current_alarm = alarm_item.get_value()
-                
+
                 if self.jk.missing_updates > 20:
                     if current_alarm != 2:
-                        self._dbusservice["/Alarms/InternalFailure"] = 2
+                        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
                         self.restart_ble_hardware_and_bluez_driver()
                 else:
                     if current_alarm != 1:
-                        self._dbusservice["/Alarms/InternalFailure"] = 1
+                        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
                         self.restart_bluetooth_service()
-            except:
+            except Exception:
                 pass
 
-        if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(minutes=self.config.get_interval()):
+        if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(
+            minutes=self.config.get_interval()
+        ):
             try:
                 async with BMS(ble_device=self.jk.device) as bms:
                     data: BMSSample = await bms.async_update()
-                    
-                    self.jk.voltage = data['voltage']
-                    self.jk.current = data['current']
-                    self.jk.power = data['power']
-                    self.jk.soc = data['battery_level']
-                    self.jk.temperature = data['temperature']
-                    
-                    self.jk.last_update = datetime.now()
-                    self.jk.missing_updates = 0
-                    self._dbusservice["/Alarms/InternalFailure"] = 0
 
-                    self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
-                    self._dbusservice["/Dc/0/Power"] = self.jk.power
-                    self._dbusservice["/Dc/0/Current"] = self.jk.current
-                    self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
-                    self._dbusservice["/Soc"] = self.jk.soc
-                    
-                    self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
-                        self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+                    self.jk.voltage     = data['voltage']
+                    self.jk.current     = data['current']
+                    self.jk.power       = data['power']
+                    self.jk.soc         = data['battery_level']
+                    self.jk.temperature = data['temperature']
+
+                    self.jk.last_update      = datetime.now()
+                    self.jk.missing_updates  = 0
 
                     capacityAh = self.config.get_battery_capacity()
-                    consumed = capacityAh * (100 - self.jk.soc) / 100
-                    self._dbusservice["/ConsumedAmphours"] = consumed
-                    
+                    consumed   = capacityAh * (100 - self.jk.soc) / 100
+                    ttg        = self.remaining_time_seconds(
+                        capacityAh, self.jk.soc, self.jk.current
+                    )
                     if consumed > 0:
-                        self._dbusservice["/History/LastDischarge"] = consumed
                         self.jk.hist_last_discharge = consumed
 
-                    logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
-                    index = self._dbusservice["/UpdateIndex"] + 1
-                    self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
-                    
+                    # Tutte le scritture dbus schedulate nel thread GLib
+                    GLib.idle_add(self._dbus_commit, {
+                        "/Alarms/InternalFailure": 0,
+                        "/Dc/0/Voltage":           self.jk.voltage,
+                        "/Dc/0/Power":             self.jk.power,
+                        "/Dc/0/Current":           self.jk.current,
+                        "/Dc/0/Temperature":       self.jk.temperature,
+                        "/Soc":                    self.jk.soc,
+                        "/TimeToGo":               ttg,
+                        "/ConsumedAmphours":       consumed,
+                        "/History/LastDischarge":  self.jk.hist_last_discharge,
+                    })
+                    # UpdateIndex richiede lettura+scrittura atomica nel thread GLib
+                    GLib.idle_add(self._increment_update_index)
+
+                    logging.debug(
+                        "BATTERY UPDATED: SOC %s, V %s",
+                        self.jk.soc, self.jk.voltage,
+                    )
+
             except Exception as e:
                 logging.error(f"Failed to update BMS: {e}")
                 self.jk.missing_updates += 1
                 if self.jk.missing_updates > 5:
                     self.jk.device = None
 
+    # ------------------------------------------------------------------
+    # Helper dbus — eseguiti nel thread GLib tramite idle_add
+    # ------------------------------------------------------------------
+    def _dbus_set(self, path, value):
+        """Scrive un singolo path dbus. Ritorna False (one-shot idle_add)."""
+        self._dbusservice[path] = value
+        return False
 
+    def _dbus_commit(self, values: dict):
+        """Scrive un dizionario di path dbus in un colpo solo."""
+        for path, value in values.items():
+            self._dbusservice[path] = value
+        return False
 
+    def _increment_update_index(self):
+        """Legge e incrementa UpdateIndex (0-255) in modo atomico nel thread GLib."""
+        index = self._dbusservice["/UpdateIndex"] + 1
+        self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
+        return False
+
+    # ------------------------------------------------------------------
+    # Resto identico all'originale
+    # ------------------------------------------------------------------
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else updated %s to %s" % (path, value))
-        return True  # accept the change
+        return True
 
     def vreg_link_get(self, reg_id):
         if reg_id == JkReg.DC_MONITOR_MODE.value:
@@ -233,12 +322,11 @@ class JkMonitorService:
         elif reg_id == JkReg.VE_REG_CURRENT_THRESHOLD.value:
             return GenericReg.OK.value, utils.convert_decimal(0.1)
         elif reg_id == JkReg.VE_REG_CHARGED_CURRENT.value:
-            return GenericReg.OK.value, utils.convert_decimal(0.02) #tail current
+            return GenericReg.OK.value, utils.convert_decimal(0.02)
         elif reg_id == JkReg.VE_REG_LOW_SOC.value:
-            return GenericReg.OK.value, utils.convert_decimal(1) #discharge threshold
+            return GenericReg.OK.value, utils.convert_decimal(1)
         elif reg_id == JkReg.VE_REG_HIST_LAST_DISCHARGE.value:
             return GenericReg.OK.value, utils.convert_decimal(self.jk.hist_last_discharge)
-
         else:
             logging.debug("GET REG_ID %s" % reg_id)
             return GenericReg.OK.value, []
@@ -256,121 +344,91 @@ class JkMonitorService:
         return GenericReg.OK.value, data
 
     def remaining_time_seconds(self, capacity, soc, current_a):
-
-        MIN_CURRENT = 0.1 
-
+        MIN_CURRENT = 0.1
         if current_a >= -MIN_CURRENT:
-            return 864000 
-
+            return 864000
         remaining_ah = capacity * (soc / 100.0)
-
         hours = remaining_ah / abs(current_a)
-
-        seconds = int(hours * 3600)
-
-        return seconds
+        return int(hours * 3600)
 
     def restart_ble_hardware_and_bluez_driver(self):
-
         logging.info("*** Restarting BLE hardware and Bluez driver ***")
-
         result = subprocess.run(["bluetoothctl", "power", "off"], capture_output=True, text=True)
         logging.info(f"power off exit code: {result.returncode}")
         logging.info(f"power off output: {result.stdout}")
-
         sleep(5)
-
         result = subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, text=True)
         logging.info(f"power on exit code: {result.returncode}")
         logging.info(f"power on output: {result.stdout}")
 
-
     def restart_bluetooth_service(self):
         logging.warning("*** Tentativo riavvio demone Bluetooth ***")
         try:
-            # 1. Killiamo eventuali processi bluetti rimasti appesi ( zombie )
-            # Questo è importante perché potrebbero trattenere il socket
             subprocess.run(['pkill', 'unblock'], timeout=5)
-
             sleep(5)
-
-            subprocess.run(['hciconfig','hci0', 'reset'], timeout=5)
-
+            subprocess.run(['hciconfig', 'hci0', 'reset'], timeout=5)
             sleep(5)
-
-            result = subprocess.run(['bluetoothctl','power', 'on'], timeout=5)
-            
+            result = subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
             if result.returncode == 0:
                 logging.info("Servizio Bluetooth riavviato con successo.")
-                # Diamo un attimo al driver per reinsediarsi
                 sleep(3)
                 return True
             else:
                 logging.error(f"Errore systemctl: {result.stderr}")
                 return False
-                
         except Exception as e:
             logging.exception(f"Eccezione durante riavvio bluetooth: {e}")
             return False
-        
+
 
 def main():
     config = JkConfig()
 
-
-    # set logging level to include info level entries
     level = logging.INFO
     if config.get_debug():
         level = logging.DEBUG
     logging.basicConfig(level=level)
     logging.info(">>>>>>>>>>>>>>>> Jk Monitor Starting <<<<<<<<<<<<<<<<")
 
-    thread.daemon = True  # allow the program to quit
+    thread.daemon = True
 
     from dbus.mainloop.glib import DBusGMainLoop
-
-    # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
     DBusGMainLoop(set_as_default=True)
 
     pvac_output = JkMonitorService(
         servicename="com.victronenergy.battery.jkbms",
         deviceinstance=295,
         paths={
-            "/Dc/0/Voltage": {"initial": 0},
-            "/Dc/0/Current": {"initial": 0},
-            "/Dc/0/Power": {"initial": 0},
-            "/Soc": {"initial": 0},
-            "/UpdateIndex": {"initial": 0},
-            "/Capacity": {"initial": config.get_battery_capacity()},
-            "/TimeToGo": {"initial": 0},
-            "/ConsumedAmphours": {"initial": 0},
-            "/Dc/0/Temperature": {"initial": 0},
-            "/Settings/HasTemperature": {"initial": 1},
-
-            "/Settings/MonitorMode": {"initial": 0},
-            "/Alarms/LowSoc": {"initial": 0},
-            "/Alarms/InternalFailure": {"initial": 0},
-
-            "/History/DeepestDischarge": {"initial": None}, 
-            "/History/LastDischarge": {"initial": None}, 
-            "/History/AverageDischarge": {"initial": None}, 
-            "/History/ChargeCycles": {"initial": None}, 
-            "/History/FullDischarges": {"initial": None}, 
-            "/History/TotalAhDrawn": {"initial": None}, 
-            "/History/MinimumVoltage": {"initial": None}, 
-            "/History/MaximumVoltage": {"initial": None}, 
-            "/History/TimeSinceLastFullCharge": {"initial": None}, 
-            "/History/AutomaticSyncs": {"initial": None}, 
-            "/History/DischargedEnergy": {"initial": None}, 
-            "/History/ChargedEnergy": {"initial": None}
-
+            "/Dc/0/Voltage":                    {"initial": 0},
+            "/Dc/0/Current":                    {"initial": 0},
+            "/Dc/0/Power":                      {"initial": 0},
+            "/Soc":                             {"initial": 0},
+            "/UpdateIndex":                     {"initial": 0},
+            "/Capacity":                        {"initial": config.get_battery_capacity()},
+            "/TimeToGo":                        {"initial": 0},
+            "/ConsumedAmphours":                {"initial": 0},
+            "/Dc/0/Temperature":                {"initial": 0},
+            "/Settings/HasTemperature":         {"initial": 1},
+            "/Settings/MonitorMode":            {"initial": 0},
+            "/Alarms/LowSoc":                   {"initial": 0},
+            "/Alarms/InternalFailure":          {"initial": 0},
+            "/History/DeepestDischarge":        {"initial": None},
+            "/History/LastDischarge":           {"initial": None},
+            "/History/AverageDischarge":        {"initial": None},
+            "/History/ChargeCycles":            {"initial": None},
+            "/History/FullDischarges":          {"initial": None},
+            "/History/TotalAhDrawn":            {"initial": None},
+            "/History/MinimumVoltage":          {"initial": None},
+            "/History/MaximumVoltage":          {"initial": None},
+            "/History/TimeSinceLastFullCharge": {"initial": None},
+            "/History/AutomaticSyncs":          {"initial": None},
+            "/History/DischargedEnergy":        {"initial": None},
+            "/History/ChargedEnergy":           {"initial": None},
         },
         config=config,
     )
 
-    logging.info(
-        "Connected to dbus, and switching over to GLib.MainLoop() (= event based)"
-    )
+    logging.info("Connected to dbus, and switching over to GLib.MainLoop() (= event based)")
     mainloop = GLib.MainLoop()
     mainloop.run()
 
