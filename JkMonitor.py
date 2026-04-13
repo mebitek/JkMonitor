@@ -16,9 +16,7 @@ Reading information from jk  bms bluetooth via aiobmsble librasries and puts the
 import os
 import sys
 import json
-import logging
 import dbus
-import requests
 import _thread as thread
 import subprocess
 from datetime import datetime, timedelta
