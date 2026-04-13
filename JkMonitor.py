@@ -74,6 +74,7 @@ class JkMonitorService:
     ):
 
         self.config = config or JkConfig()
+        self.is_updating = False
 
         # jk class
         self.jk = JkBms(config.get_device_name(), 0, 12.8, 0, 0, 0)
