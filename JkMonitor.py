@@ -60,6 +60,7 @@ class JkBms:
         self.last_update = None
         self.missing_updates = 0
         self.device = None
+        selg.bms = None
 
 class JkMonitorService:
     def __init__(
@@ -163,8 +164,7 @@ class JkMonitorService:
         
         if self.jk.missing_updates > 10:
             try:
-                alarm_item = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
-                current_alarm = alarm_item.get_value()
+                current_alarm = self._dbusservice["/Alarms/InternalFailure"]
                 
                 if self.jk.missing_updates > 20:
                     if current_alarm != 2:
@@ -235,7 +235,12 @@ class JkMonitorService:
                     self.jk.bms = None
                     self.jk.device = None
 
+    def _safe_dbus_update(self, path, value):
+        GLib.idle_add(self._set_dbus_value, path, value)
 
+    def _set_dbus_value(self, path, value):
+        self._dbusservice[path] = value
+        return False # Esegue una volta sola
 
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else updated %s to %s" % (path, value))
