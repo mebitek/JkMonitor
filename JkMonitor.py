@@ -60,7 +60,6 @@ class JkBms:
         self.last_update = None
         self.missing_updates = 0
         self.device = None
-        self.bms = None
 
 class JkMonitorService:
     def __init__(
@@ -74,7 +73,6 @@ class JkMonitorService:
     ):
 
         self.config = config or JkConfig()
-        self.is_updating = False
 
         # jk class
         self.jk = JkBms(config.get_device_name(), 0, 12.8, 0, 0, 0)
@@ -128,113 +126,95 @@ class JkMonitorService:
             )
 
         self._dbusservice.register()
-        self.loop = asyncio.new_event_loop()
-        thread.start_new_thread(self._run_loop, ())
-        GLib.timeout_add(2000, self._update)
+        GLib.timeout_add(1000, self._update)
 
-    def _run_loop(self):
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
 
     def _update(self):
-        if self.is_updating:
-            return True
-        self.is_updating = True
         try:
-            asyncio.run_coroutine_threadsafe(self._async_wrapper(), self.loop)
+            asyncio.run(self._async_update_logic())
         except Exception:
-            logging.exception("Exception while scheduling async update")
-            self.is_updating = False
+            logging.exception("Exception while getting jk bms status")
+        
         return True
-
-    async def _async_wrapper(self):
-        try:
-            await self._async_update_logic()
-        finally:
-            self.is_updating = False
 
 
     async def _async_update_logic(self):
-        # 1. RECUPERO DEVICE (SOLO SE MANCA)
         if self.jk.device is None:
-            logging.info("Searching for device...")
+            logging.info("Searching for device: %s", self.config.get_device_name())
             try:
-                # Timeout ridotto per non accavallare le chiamate
-                device = await BleakScanner.find_device_by_name(self.config.get_device_name(), timeout=5.0)
+                device = await BleakScanner.find_device_by_name(self.config.get_device_name(), timeout=10.0)
                 if device:
                     self.jk.device = device
+                    logging.info("Found device: %s", device.address)
                 else:
-                    logging.warning("Device not found")
+                    logging.warning("Device not found yet...")
                     return
             except Exception as e:
-                logging.error(f"Scan error: {e}")
+                self.restart_ble_hardware_and_bluez_driver()
+                logging.error(f"Error during scan: {e}")
                 return
 
-        # 2. LOGICA RESET ALLARMI E CONNESSIONE
-        try:
-            if self.jk.bms is None:
-                logging.info("Connecting to BMS...")
-                self.jk.bms = BMS(ble_device=self.jk.device)
-                await asyncio.wait_for(self.jk.bms.connect(), timeout=7.0)
-
-            # Lettura dati
-            data = await asyncio.wait_for(self.jk.bms.async_update(), timeout=7.0)
-            
-            # 3. VERIFICA DATI E RESET IMMEDIATO ALLARME
-            if data and 'voltage' in data:
-                # Aggiorniamo prima le variabili locali
-                self.jk.voltage = float(data['voltage'])
-                self.jk.current = float(data['current'])
-                self.jk.power = float(data['power'])
-                self.jk.soc = int(data['battery_level'])
-                self.jk.temperature = float(data['temperature'])
-                self.jk.last_update = datetime.now()
-                self.jk.missing_updates = 0
-
-                # RESET ALLARME E UPDATE DATI (Tutto tramite safe_update)
-                # Questo è quello che deve resettare l'errore iniziale!
-                self._safe_dbus_update("/Alarms/InternalFailure", 0)
-                self._safe_dbus_update("/Dc/0/Voltage", self.jk.voltage)
-                self._safe_dbus_update("/Dc/0/Power", self.jk.power)
-                self._safe_dbus_update("/Dc/0/Current", self.jk.current)
-                self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
-                self._safe_dbus_update("/Soc", self.jk.soc)
-                
-                # Update Index - evito di leggere dal dbus per non bloccare
-                # Usiamo un counter interno o lo facciamo gestire a GLib
-                GLib.idle_add(self._increment_index)
-                
-            else:
-                raise ValueError("Incomplete data received")
-
-        except Exception as e:
-            logging.error(f"Update failed: {e}")
-            self.jk.missing_updates += 1
-            
-            # Se fallisce, puliamo l'oggetto BMS così si riconnette al prossimo giro
+        dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
+        
+        if self.jk.missing_updates > 10:
             try:
-                if self.jk.bms:
-                    await self.jk.bms.disconnect()
+                alarm_item = VeDbusItemImport(dbus_conn, "com.victronenergy.battery.jkbms", '/Alarms/InternalFailure')
+                current_alarm = alarm_item.get_value()
+                
+                if self.jk.missing_updates > 20:
+                    if current_alarm != 2:
+                        self._dbusservice["/Alarms/InternalFailure"] = 2
+                        self.restart_ble_hardware_and_bluez_driver()
+                else:
+                    if current_alarm != 1:
+                        self._dbusservice["/Alarms/InternalFailure"] = 1
+                        self.restart_bluetooth_service()
             except:
                 pass
-            self.jk.bms = None
 
-            # Gestione allarmi se i fallimenti persistono
-            if self.jk.missing_updates > 10:
-                self._safe_dbus_update("/Alarms/InternalFailure", 1)
-
-    def _increment_index(self):
-        # Questa funzione gira nel thread principale di GLib
-        current = self._dbusservice["/UpdateIndex"]
-        new_index = (current + 1) if current < 255 else 0
-        self._dbusservice["/UpdateIndex"] = new_index
-        return False
+        if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(minutes=self.config.get_interval()):
+            try:
+                async with BMS(ble_device=self.jk.device) as bms:
+                    data: BMSSample = await bms.async_update()
                     
-    def _safe_dbus_update(self, path, value):
-        GLib.idle_add(self._set_dbus_value, path, value)
-    def _set_dbus_value(self, path, value):
-        self._dbusservice[path] = value
-        return False # Esegue una volta sola
+                    self.jk.voltage = data['voltage']
+                    self.jk.current = data['current']
+                    self.jk.power = data['power']
+                    self.jk.soc = data['battery_level']
+                    self.jk.temperature = data['temperature']
+                    
+                    self.jk.last_update = datetime.now()
+                    self.jk.missing_updates = 0
+                    self._dbusservice["/Alarms/InternalFailure"] = 0
+
+                    self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
+                    self._dbusservice["/Dc/0/Power"] = self.jk.power
+                    self._dbusservice["/Dc/0/Current"] = self.jk.current
+                    self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
+                    self._dbusservice["/Soc"] = self.jk.soc
+                    
+                    self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
+                        self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+
+                    capacityAh = self.config.get_battery_capacity()
+                    consumed = capacityAh * (100 - self.jk.soc) / 100
+                    self._dbusservice["/ConsumedAmphours"] = consumed
+                    
+                    if consumed > 0:
+                        self._dbusservice["/History/LastDischarge"] = consumed
+                        self.jk.hist_last_discharge = consumed
+
+                    logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
+                    index = self._dbusservice["/UpdateIndex"] + 1
+                    self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
+                    
+            except Exception as e:
+                logging.error(f"Failed to update BMS: {e}")
+                self.jk.missing_updates += 1
+                if self.jk.missing_updates > 5:
+                    self.jk.device = None
+
+
 
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else updated %s to %s" % (path, value))
