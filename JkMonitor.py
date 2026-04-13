@@ -136,12 +136,21 @@ class JkMonitorService:
         self.loop.run_forever()
 
     def _update(self):
+        if self.is_updating:
+            return True
+        self.is_updating = True
         try:
-            asyncio.run_coroutine_threadsafe(self._async_update_logic(), self.loop)
+            asyncio.run_coroutine_threadsafe(self._async_wrapper(), self.loop)
         except Exception:
             logging.exception("Exception while scheduling async update")
-        
+            self.is_updating = False
         return True
+
+    async def _async_wrapper(self):
+        try:
+            await self._async_update_logic()
+        finally:
+            self.is_updating = False
 
 
     async def _async_update_logic(self):
@@ -211,7 +220,7 @@ class JkMonitorService:
                 self._safe_dbus_update("/ConsumedAmphours", consumed)  
                 
                 if consumed > 0:
-                    self._safe_dbus_update("/History/LastDischarg", consumed)
+                    self._safe_dbus_update("/History/LastDischarge", consumed)
                     self.jk.hist_last_discharge = consumed
 
                 logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
