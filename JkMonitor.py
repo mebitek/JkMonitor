@@ -196,28 +196,27 @@ class JkMonitorService:
                 
                 self.jk.last_update = datetime.now()
                 self.jk.missing_updates = 0
-                self._dbusservice["/Alarms/InternalFailure"] = 0
 
-                self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
-                self._dbusservice["/Dc/0/Power"] = self.jk.power
-                self._dbusservice["/Dc/0/Current"] = self.jk.current
-                self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
-                self._dbusservice["/Soc"] = self.jk.soc
-                
-                self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
-                    self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+                self._safe_dbus_update("/Alarms/InternalFailure", 0)
+                self._safe_dbus_update("/Dc/0/Voltage", self.jk.voltage)
+                self._safe_dbus_update("/Dc/0/Power", self.jk.power)
+                self._safe_dbus_update("/Dc/0/Current", self.jk.current)
+                self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
+                self._safe_dbus_update("/Soc", self.jk.soc)                
+                time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+                self._safe_dbus_update("/TimeToGo", time_to_go)
 
                 capacityAh = self.config.get_battery_capacity()
                 consumed = capacityAh * (100 - self.jk.soc) / 100
-                self._dbusservice["/ConsumedAmphours"] = consumed
+                self._safe_dbus_update("/ConsumedAmphours", consumed)  
                 
                 if consumed > 0:
-                    self._dbusservice["/History/LastDischarge"] = consumed
+                    self._safe_dbus_update("/History/LastDischarg", consumed)
                     self.jk.hist_last_discharge = consumed
 
                 logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
                 index = self._dbusservice["/UpdateIndex"] + 1
-                self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
+                self._safe_dbus_update("/UpdateIndex", index if index <= 255 else 0)
                     
             except Exception as e:
                 logging.error(f"Failed to update BMS: {e}")
