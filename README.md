@@ -1,4 +1,4 @@
-# venus.JK Monitor v1.0.0
+# venus.JK Monitor v1.1.0
 Service to integrate a jk bms  into cerbos gui
 
 The script has been developed with my current RV setup in mind.
@@ -25,6 +25,10 @@ you need to install via pip the `aiobmsble`
         - `opkg update`
         - `opkg install python3-pip`
         - `pip3 install aiobmsble`
+        - determinate your python vrsion
+        - `mkdir -p /usr/lib/python3.12/site-packages/statistics`
+        - `touch /usr/lib/python3.12/site-packages/statistics/__init__.py`
+        - `echo "def fmean(data): return sum(data) / len(data)" > /usr/lib/python3.12/site-packages/statistics/__init__.py`
     2. get the jk bms name from the jk app
 * #### SetupHelper
     1. install [SetupHelper](https://github.com/kwindrem/SetupHelper)

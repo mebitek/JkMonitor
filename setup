@@ -21,3 +21,7 @@ source "/data/SetupHelper/HelperResources/IncludeHelpers"
 opkg update
 opkg install python3-pip
 pip3 install aiobmsble
+DIR=`python3 -c "import sys; print('\n'.join(sys.path))"| grep site-packages`
+mkdir -p /usr/lib/$DIR/statistics
+touch /usr/lib/$DIR/statistics/__init__.py
+echo "def fmean(data): return sum(data) / len(data)" > /usr/lib/$DIR/statistics/__init__.py
