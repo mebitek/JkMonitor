@@ -169,8 +169,6 @@ class JkMonitorService:
                 self.restart_ble_hardware_and_bluez_driver()
                 logging.error(f"Error during scan: {e}")
                 return
-
-        dbus_conn = dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else dbus.SystemBus()
         
         if self.jk.missing_updates > 10:
             try:
@@ -189,62 +187,54 @@ class JkMonitorService:
 
         if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(minutes=self.config.get_interval()):
             try:
+                # Se non siamo connessi o l'oggetto è vecchio, resettiamo
                 if self.jk.bms is None:
                     logging.info("Connecting to BMS...")
                     self.jk.bms = BMS(ble_device=self.jk.device)
-                    await self.jk.bms.connect()
+                    await asyncio.wait_for(self.jk.bms.connect(), timeout=10) # Timeout anche qui!
 
-                data: BMSSample = await asyncio.wait_for(
-                    self.jk.bms.async_update(), timeout=5
-                )
-                    
-                self.jk.voltage = data['voltage']
-                self.jk.current = data['current']
-                self.jk.power = data['power']
-                self.jk.soc = data['battery_level']
-                self.jk.temperature = data['temperature']
+                # Lettura dati
+                data = await asyncio.wait_for(self.jk.bms.async_update(), timeout=10)
                 
-                self.jk.last_update = datetime.now()
-                self.jk.missing_updates = 0
-
-                self._safe_dbus_update("/Alarms/InternalFailure", 0)
-                self._safe_dbus_update("/Dc/0/Voltage", self.jk.voltage)
-                self._safe_dbus_update("/Dc/0/Power", self.jk.power)
-                self._safe_dbus_update("/Dc/0/Current", self.jk.current)
-                self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
-                self._safe_dbus_update("/Soc", self.jk.soc)                
-                time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
-                self._safe_dbus_update("/TimeToGo", time_to_go)
-                capacityAh = self.config.get_battery_capacity()
-                consumed = capacityAh * (100 - self.jk.soc) / 100
-                self._safe_dbus_update("/ConsumedAmphours", consumed)  
-                
-                if consumed > 0:
-                    self._safe_dbus_update("/History/LastDischarge", consumed)
-                    self.jk.hist_last_discharge = consumed
-
-                logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
-                current_index = self._dbusservice["/UpdateIndex"]
-                new_index = current_index + 1
-                if new_index > 255:
-                    new_index = 0
-                self._safe_dbus_update("/UpdateIndex", new_index)
+                # Verifichiamo che i dati esistano davvero prima di usarli
+                if data and 'voltage' in data:
+                    self.jk.voltage = data['voltage']
+                    self.jk.current = data['current']
+                    self.jk.power = data['power']
+                    self.jk.soc = data['battery_level']
+                    self.jk.temperature = data['temperature']
                     
+                    self.jk.last_update = datetime.now()
+                    self.jk.missing_updates = 0
+
+                    # AGGIORNAMENTO DBUS (TUTTI SAFE)
+                    self._safe_dbus_update("/Alarms/InternalFailure", 0)
+                    self._safe_dbus_update("/Dc/0/Voltage", self.jk.voltage)
+                    self._safe_dbus_update("/Dc/0/Power", self.jk.power)
+                    self._safe_dbus_update("/Dc/0/Current", self.jk.current)
+                    self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
+                    self._safe_dbus_update("/Soc", self.jk.soc)
+
+                    # Calcolo tempo residuo
+                    time_to_go = self.remaining_time_seconds(self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+                    self._safe_dbus_update("/TimeToGo", time_to_go)
+
+                    # Aggiorna l'indice per far capire a Victron che i dati sono nuovi
+                    new_index = (self._dbusservice["/UpdateIndex"] + 1) if self._dbusservice["/UpdateIndex"] < 255 else 0
+                    self._safe_dbus_update("/UpdateIndex", new_index)
+                else:
+                    raise ValueError("Dati ricevuti incompleti o invalidi")
+
             except Exception as e:
-                logging.error(f"Failed to update BMS: {e}")
+                logging.error(f"Errore critico durante update: {e}")
                 self.jk.missing_updates += 1
-
-                if self.jk.missing_updates > 5:
-                    logging.warning("Resetting BLE connection")
-
-                    try:
-                        if self.jk.bms:
-                            await self.jk.bms.disconnect()
-                    except:
-                        pass
-
-                    self.jk.bms = None
-                    self.jk.device = None
+                
+                # CRUCIALE: Se fallisce, annulliamo il bms così al prossimo giro tenta una nuova connessione
+                try:
+                    await self.jk.bms.disconnect()
+                except:
+                    pass
+                self.jk.bms = None
                     
     def _safe_dbus_update(self, path, value):
         GLib.idle_add(self._set_dbus_value, path, value)
