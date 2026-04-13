@@ -60,7 +60,7 @@ class JkBms:
         self.last_update = None
         self.missing_updates = 0
         self.device = None
-        selg.bms = None
+        self.bms = None
 
 class JkMonitorService:
     def __init__(
