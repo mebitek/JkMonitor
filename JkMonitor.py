@@ -207,7 +207,7 @@ class JkMonitorService:
                 self.jk.missing_updates = 0
 
                 self._safe_dbus_update("/Alarms/InternalFailure", 0)
-                self._safe_dbus_update("/Dc/0/Voltage", self.jk.voltage)
+                self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage
                 self._safe_dbus_update("/Dc/0/Power", self.jk.power)
                 self._safe_dbus_update("/Dc/0/Current", self.jk.current)
                 self._safe_dbus_update("/Dc/0/Temperature", self.jk.temperature)
