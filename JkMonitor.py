@@ -126,14 +126,19 @@ class JkMonitorService:
             )
 
         self._dbusservice.register()
-        GLib.timeout_add(1000, self._update)
+        self.loop = asyncio.new_event_loop()
+        thread.start_new_thread(self._run_loop, ())
+        GLib.timeout_add(2000, self._update)
 
+    def _run_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
 
     def _update(self):
         try:
-            asyncio.run(self._async_update_logic())
+            asyncio.run_coroutine_threadsafe(self._async_update_logic(), self.loop)
         except Exception:
-            logging.exception("Exception while getting jk bms status")
+            logging.exception("Exception while scheduling async update")
         
         return True
 
@@ -174,44 +179,60 @@ class JkMonitorService:
 
         if self.jk.last_update is None or datetime.now() > self.jk.last_update + timedelta(minutes=self.config.get_interval()):
             try:
-                async with BMS(ble_device=self.jk.device) as bms:
-                    data: BMSSample = await bms.async_update()
-                    
-                    self.jk.voltage = data['voltage']
-                    self.jk.current = data['current']
-                    self.jk.power = data['power']
-                    self.jk.soc = data['battery_level']
-                    self.jk.temperature = data['temperature']
-                    
-                    self.jk.last_update = datetime.now()
-                    self.jk.missing_updates = 0
-                    self._dbusservice["/Alarms/InternalFailure"] = 0
+                if self.jk.bms is None:
+                    logging.info("Connecting to BMS...")
+                    self.jk.bms = BMS(ble_device=self.jk.device)
+                    await self.jk.bms.connect()
 
-                    self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
-                    self._dbusservice["/Dc/0/Power"] = self.jk.power
-                    self._dbusservice["/Dc/0/Current"] = self.jk.current
-                    self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
-                    self._dbusservice["/Soc"] = self.jk.soc
+                data: BMSSample = await asyncio.wait_for(
+                    self.jk.bms.async_update(), timeout=5
+                )
                     
-                    self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
-                        self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
+                self.jk.voltage = data['voltage']
+                self.jk.current = data['current']
+                self.jk.power = data['power']
+                self.jk.soc = data['battery_level']
+                self.jk.temperature = data['temperature']
+                
+                self.jk.last_update = datetime.now()
+                self.jk.missing_updates = 0
+                self._dbusservice["/Alarms/InternalFailure"] = 0
 
-                    capacityAh = self.config.get_battery_capacity()
-                    consumed = capacityAh * (100 - self.jk.soc) / 100
-                    self._dbusservice["/ConsumedAmphours"] = consumed
-                    
-                    if consumed > 0:
-                        self._dbusservice["/History/LastDischarge"] = consumed
-                        self.jk.hist_last_discharge = consumed
+                self._dbusservice["/Dc/0/Voltage"] = self.jk.voltage  
+                self._dbusservice["/Dc/0/Power"] = self.jk.power
+                self._dbusservice["/Dc/0/Current"] = self.jk.current
+                self._dbusservice["/Dc/0/Temperature"] = self.jk.temperature
+                self._dbusservice["/Soc"] = self.jk.soc
+                
+                self._dbusservice["/TimeToGo"] = self.remaining_time_seconds(
+                    self.config.get_battery_capacity(), self.jk.soc, self.jk.current)
 
-                    logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
-                    index = self._dbusservice["/UpdateIndex"] + 1
-                    self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
+                capacityAh = self.config.get_battery_capacity()
+                consumed = capacityAh * (100 - self.jk.soc) / 100
+                self._dbusservice["/ConsumedAmphours"] = consumed
+                
+                if consumed > 0:
+                    self._dbusservice["/History/LastDischarge"] = consumed
+                    self.jk.hist_last_discharge = consumed
+
+                logging.debug("BATTERY UPDATED: SOC %s, V %s", self.jk.soc, self.jk.voltage)
+                index = self._dbusservice["/UpdateIndex"] + 1
+                self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
                     
             except Exception as e:
                 logging.error(f"Failed to update BMS: {e}")
                 self.jk.missing_updates += 1
+
                 if self.jk.missing_updates > 5:
+                    logging.warning("Resetting BLE connection")
+
+                    try:
+                        if self.jk.bms:
+                            await self.jk.bms.disconnect()
+                    except:
+                        pass
+
+                    self.jk.bms = None
                     self.jk.device = None
 
 
