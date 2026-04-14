@@ -596,6 +596,8 @@ def main():
             "/History/AutomaticSyncs":          {"initial": 0},
             "/History/DischargedEnergy":        {"initial": 0},
             "/History/ChargedEnergy":           {"initial": 0},
+            "/History/LowVoltageAlarms":        {"initial": 0},
+            "/History/HighVoltageAlarms":       {"initial": 0}
         },
         config=config,
     )
