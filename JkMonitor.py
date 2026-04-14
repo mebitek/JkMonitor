@@ -155,7 +155,7 @@ class JkMonitorService:
         self._dbusservice.register()
         self._load_history()
 
-        GLib.timeout_add(self.config.get_interval() * 60 * 1000, self._update)
+        GLib.timeout_add(1000, self._update)
 
     # ------------------------------------------------------------------
     # Async loop thread
