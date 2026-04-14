@@ -343,7 +343,7 @@ class JkMonitorService:
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
                     #debug
-                    "/RemainingCapacity":               self.jk.cycle_charge
+                    "/RemainingCapacity":               self.jk.cycle_charge,
                     "/BmsSoc":                          self.jk.bms_soc
                 })
                 GLib.idle_add(self._increment_update_index)
