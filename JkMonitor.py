@@ -51,6 +51,7 @@ class JkBms:
         self.power       = power
         self.temperature = temperature
         self.soc         = soc
+        self.design_capacity = None
         # fields provided directly by the JK BMS
         self.cycle_charge   = 0.0
         self.cycles         = 0
@@ -236,11 +237,16 @@ class JkMonitorService:
             async with BMS(ble_device=self.jk.device) as bms:
                 data: BMSSample = await bms.async_update()
 
+                if not self.jk.design_capacity:
+                    self.jk.design_capacity = data['design_capacity']
+                    self.config.write_to_config(self.jk.design_capacity, "Setup", "BatteryCapacity")
+                capacityAh = self.config.get_battery_capacity()
                 self.jk.voltage     = data['voltage']
                 self.jk.current     = data['current']
                 self.jk.power       = data['power']
                 self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
                 self.jk.temperature = data['temperature']
+               
 
                 # native JK fields — .get() for safety on older firmware
                 self.jk.cycles         = int(data.get('cycles',         0))
@@ -248,7 +254,6 @@ class JkMonitorService:
                 self.jk.battery_health = int(data.get('battery_health', 0))
                 self.jk.delta_voltage  = float(data.get('delta_voltage',0.0))
 
-                capacityAh = self.config.get_battery_capacity()
                 consumed   = capacityAh * (100 - self.jk.soc) / 100
                 ttg        = self.remaining_time_seconds(capacityAh, self.jk.soc, self.jk.current)
 
@@ -608,7 +613,7 @@ def main():
             "/History/ChargedEnergy":           {"initial": 0},
             "/History/LowVoltageAlarms":        {"initial": 0},
             "/History/HighVoltageAlarms":       {"initial": 0},
-            "/RemainingCapacity":                {"initial": 0},
+            "/RemainingCapacity":               {"initial": 0},
         },
         config=config,
     )
