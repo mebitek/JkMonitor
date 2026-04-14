@@ -458,7 +458,7 @@ class JkMonitorService:
         if reg_id == JkReg.DC_MONITOR_MODE.value:
             return GenericReg.OK.value, [0xFE]
         elif reg_id == JkReg.VE_REG_BATTERY_CAPACITY.value:
-            capacityAh = float(self.config.get_battery_capacity())
+            capacityAh = float(self.config.get_battery_capacity()/100)
             return GenericReg.OK.value, utils.convert_decimal(capacityAh)
         elif reg_id == JkReg.VE_REG_CHARGED_VOLTAGE.value:
             return GenericReg.OK.value, utils.convert_decimal(1.36)
