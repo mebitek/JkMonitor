@@ -259,6 +259,9 @@ class JkMonitorService:
                 self.jk.delta_voltage  = float(data.get('delta_voltage',0.0))
 
                 consumed   = capacityAh * (100 - self.jk.soc) / 100
+                if self.jk.soc == 100 and self.jk.current > 0:
+                    consumed = 0
+
                 ttg        = self.remaining_time_seconds(capacityAh, self.jk.soc, self.jk.current)
 
                 # -- Energy integration (Wh) using elapsed time since last update --
