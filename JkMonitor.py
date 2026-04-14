@@ -247,7 +247,7 @@ class JkMonitorService:
                 self.jk.current     = data['current']
                 self.jk.power       = data['power']
                 self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
-                if data['soc'] == 100 and self.jk.voltage > 14.1:
+                if int(data['soc']) == 100 and self.jk.voltage > 14.1:
                     self.jk.soc = 100
                 self.jk.temperature = data['temperature']
                
