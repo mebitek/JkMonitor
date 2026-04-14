@@ -51,6 +51,7 @@ class JkBms:
         self.power       = power
         self.temperature = temperature
         self.soc         = soc
+        self.bms_soc     = None
         self.design_capacity = None
         # fields provided directly by the JK BMS
         self.cycle_charge   = 0.0
@@ -247,6 +248,7 @@ class JkMonitorService:
                 self.jk.current     = data['current']
                 self.jk.power       = data['power']
                 self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
+                self.jk.bms_soc     = data['battery_level']
                 if int(data['battery_level']) == 100 and self.jk.voltage > 14.1:
                     self.jk.soc = 100
                 self.jk.temperature = data['temperature']
@@ -342,6 +344,7 @@ class JkMonitorService:
                     "/History/ChargeCycles":            self.jk.cycles,
                     #debug
                     "/RemainingCapacity":               self.jk.cycle_charge
+                    "/BmsSoc":                          self.jk.bms_soc
                 })
                 GLib.idle_add(self._increment_update_index)
 
@@ -621,6 +624,7 @@ def main():
             "/History/LowVoltageAlarms":        {"initial": 0},
             "/History/HighVoltageAlarms":       {"initial": 0},
             "/RemainingCapacity":               {"initial": 0},
+            "/BmsSoc":                          {"initial": 0},
         },
         config=config,
     )
