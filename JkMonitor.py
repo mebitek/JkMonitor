@@ -321,7 +321,7 @@ class JkMonitorService:
                     "/History/AverageDischarge":        round(avg_discharge, 3),
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
-                    "/History/TotalAhDrawn":            self.jk.cycle_charge,
+                    "/History/TotalAhDrawn":            self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
                 })
                 GLib.idle_add(self._increment_update_index)
 
