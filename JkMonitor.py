@@ -239,7 +239,7 @@ class JkMonitorService:
                 self.jk.voltage     = data['voltage']
                 self.jk.current     = data['current']
                 self.jk.power       = data['power']
-                self.jk.soc         = (data['cycle_charge'] * 100) / self.config.get_battery_capacity()
+                self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
                 self.jk.temperature = data['temperature']
 
                 # native JK fields — .get() for safety on older firmware
@@ -328,6 +328,8 @@ class JkMonitorService:
                     "/History/TotalAhDrawn":            self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
+                    #debug
+                    "/RemainingCapacity":               self.jk.cycle_charge
                 })
                 GLib.idle_add(self._increment_update_index)
 
@@ -605,7 +607,8 @@ def main():
             "/History/DischargedEnergy":        {"initial": 0},
             "/History/ChargedEnergy":           {"initial": 0},
             "/History/LowVoltageAlarms":        {"initial": 0},
-            "/History/HighVoltageAlarms":       {"initial": 0}
+            "/History/HighVoltageAlarms":       {"initial": 0},
+            "/RemainingCapacity":                {"initial": 0},
         },
         config=config,
     )
