@@ -239,7 +239,9 @@ class JkMonitorService:
 
                 if not self.jk.design_capacity:
                     self.jk.design_capacity = data['design_capacity']
-                    self.config.write_to_config(self.jk.design_capacity, "Setup", "BatteryCapacity")
+                    if self.jk.design_capacity != self.config.get_battery_capacity():
+                        self.config.write_to_config(self.jk.design_capacity, "Setup", "BatteryCapacity")
+                        self.config = JkConfig()
                 capacityAh = self.config.get_battery_capacity()
                 self.jk.voltage     = data['voltage']
                 self.jk.current     = data['current']
