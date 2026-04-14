@@ -54,6 +54,7 @@ class JkBms:
         # fields provided directly by the JK BMS
         self.cycle_charge   = 0.0
         self.cycles         = 0
+        self.automatic_syncs = 0
         self.battery_health = 0
         self.delta_voltage  = 0.0
         # calculated / persistent history
@@ -266,6 +267,7 @@ class JkMonitorService:
                 # -- TimeSinceLastFullCharge --
                 if self.jk.soc >= 100:
                     self.jk.hist_last_full_charge = datetime.now()
+                    self.jk.automatic_syncs = self.jk.automatic_syncs + 1
                 time_since_full = 0
                 if self.jk.hist_last_full_charge is not None:
                     time_since_full = int(
@@ -294,9 +296,12 @@ class JkMonitorService:
                 if self.jk.hist_max_voltage is None or self.jk.voltage > self.jk.hist_max_voltage:
                     self.jk.hist_max_voltage = self.jk.voltage
 
+                # total ah drawn
+                total_drawn = self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
+
                 # -- AverageDischarge: cycle_charge / cycles (native from BMS) --
                 avg_discharge = (
-                    self.jk.cycle_charge / self.jk.cycles if self.jk.cycles > 0 else 0.0
+                    total_drawn / self.jk.automatic_syncs if self.jk.automatic_syncs > 0 else 0.0
                 )
 
                 # Push all values to dbus in the GLib thread
@@ -319,9 +324,10 @@ class JkMonitorService:
                     "/History/FullDischarges":          self.jk.hist_full_discharges,
                     "/History/TimeSinceLastFullCharge": time_since_full,
                     "/History/AverageDischarge":        round(avg_discharge, 3),
+                    "/History/AutomaticSyncs":          self.jk.automatic_syncs,
+                    "/History/TotalAhDrawn":            self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
-                    "/History/TotalAhDrawn":            self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
                 })
                 GLib.idle_add(self._increment_update_index)
 
@@ -360,6 +366,7 @@ class JkMonitorService:
             self.jk.hist_last_full_charge = (
                 datetime.fromisoformat(last_fc) if last_fc else None
             )
+            self.jk.automatic_syncs = int(data.get("automatic_syncs", 0))
             # native BMS fields — used as fallback until first BMS update
             self.jk.cycles         = int(data.get("cycles",         0))
             self.jk.cycle_charge   = float(data.get("cycle_charge", 0.0))
@@ -398,6 +405,7 @@ class JkMonitorService:
                 ),
                 # native BMS fields (cached for restart)
                 "cycles":            self.jk.cycles,
+                "automatic_syncs":   self.jk.automatic_syncs,
                 "cycle_charge":      self.jk.cycle_charge,
                 "battery_health":    self.jk.battery_health,
                 "last_saved":        datetime.now().isoformat(),
