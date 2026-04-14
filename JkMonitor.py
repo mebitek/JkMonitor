@@ -128,7 +128,7 @@ class JkMonitorService:
 
         self._dbusservice.register()
 
-        GLib.timeout_add(self.config.get_interval() * 60 * 1000, self._update)
+        GLib.timeout_add(1000, self._update)
 
     def _run_async_loop(self):
         asyncio.set_event_loop(self._async_loop)
