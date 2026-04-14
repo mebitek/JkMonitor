@@ -40,6 +40,8 @@ from settingsdevice import SettingsDevice
 
 from jk_config import JkConfig
 
+HISTORY_FILE = "/data/conf/jk_history.json"
+
 
 class JkBms:
     def __init__(self, name, soc, voltage, current, power, temperature):
@@ -49,8 +51,26 @@ class JkBms:
         self.power = power
         self.temperature = temperature
         self.soc = soc
-        self.hist_last_discharge = None
-        self.last_update = None
+        # campi extra forniti direttamente dal BMS JK
+        self.cycle_charge   = 0.0   # Ah totali ciclati (dal BMS)
+        self.cycles         = 0     # cicli di carica (dal BMS)
+        self.battery_health = 0     # % salute batteria (dal BMS)
+        self.delta_voltage  = 0.0   # delta tensione tra cella max e min (dal BMS)
+        # history calcolata/persistente
+        self.hist_last_discharge:    float      = 0.0
+        self.hist_deepest_discharge: float      = 0.0
+        self.hist_min_voltage: float | None     = None
+        self.hist_max_voltage: float | None     = None
+        # energy tracking (Wh)
+        self.hist_discharged_energy: float      = 0.0   # Wh totali scaricati
+        self.hist_charged_energy:    float      = 0.0   # Wh totali caricati
+        # full discharge counter
+        self.hist_full_discharges:   int        = 0     # scariche complete
+        self._soc_was_high:          bool       = False # flag: SOC era sopra soglia alta
+        # last full charge timestamp
+        self.hist_last_full_charge: datetime | None = None  # quando SOC ha toccato 100%
+        # previous update time (per integrare energia)
+        self.last_update: datetime | None       = None
         self.missing_updates = 0
         self.device = None
 
@@ -128,6 +148,8 @@ class JkMonitorService:
 
         self._dbusservice.register()
 
+        self._load_history()
+
         GLib.timeout_add(self.config.get_interval() * 60 * 1000, self._update)
 
     def _run_async_loop(self):
@@ -135,9 +157,8 @@ class JkMonitorService:
         self._async_loop.run_forever()
 
     def _update(self):
-
         if not self._ble_lock.acquire(blocking=False):
-            logging.warning("BLE updating, skipping....")
+            logging.warning("BLE update already in progress, skipping cycle.")
             return True
 
         future = asyncio.run_coroutine_threadsafe(
@@ -150,10 +171,9 @@ class JkMonitorService:
         try:
             future.result()
         except Exception:
-            logging.exception("unhandled exception updating BLE")
+            logging.exception("Unhandled exception in async BLE update")
         finally:
             self._ble_lock.release()
-
 
     async def _async_update_logic(self):
         if self.jk.device is None:
@@ -198,29 +218,87 @@ class JkMonitorService:
                     self.jk.soc         = data['battery_level']
                     self.jk.temperature = data['temperature']
 
-                    self.jk.last_update      = datetime.now()
-                    self.jk.missing_updates  = 0
+                    self.jk.cycles         = int(data.get('cycles', 0))
+                    self.jk.cycle_charge   = float(data.get('cycle_charge', 0.0))
+                    self.jk.battery_health = int(data.get('battery_health', 0))
+                    self.jk.delta_voltage  = float(data.get('delta_voltage', 0.0))
 
                     capacityAh = self.config.get_battery_capacity()
                     consumed   = capacityAh * (100 - self.jk.soc) / 100
                     ttg        = self.remaining_time_seconds(
                         capacityAh, self.jk.soc, self.jk.current
                     )
+
+                    if self.jk.last_update is not None:
+                        dt_h = (datetime.now() - self.jk.last_update).total_seconds() / 3600.0
+                        wh   = abs(self.jk.power) * dt_h
+                        if self.jk.current < 0:
+                            self.jk.hist_discharged_energy += wh
+                        elif self.jk.current > 0:
+                            self.jk.hist_charged_energy += wh
+
+                    self.jk.last_update     = datetime.now()
+                    self.jk.missing_updates = 0
+
+                    if self.jk.soc >= 100:
+                        self.jk.hist_last_full_charge = datetime.now()
+
+                    time_since_full = 0
+                    if self.jk.hist_last_full_charge is not None:
+                        time_since_full = int(
+                            (datetime.now() - self.jk.hist_last_full_charge).total_seconds()
+                        )
+
+                    SOC_HIGH = 80
+                    SOC_LOW  = 20
+                    if self.jk.soc >= SOC_HIGH:
+                        self.jk._soc_was_high = True
+                    if self.jk._soc_was_high and self.jk.soc <= SOC_LOW:
+                        self.jk.hist_full_discharges += 1
+                        self.jk._soc_was_high = False
+                        logging.info("Full discharge detected (#%d)", self.jk.hist_full_discharges)
+
                     if consumed > 0:
                         self.jk.hist_last_discharge = consumed
+                    if consumed > self.jk.hist_deepest_discharge:
+                        self.jk.hist_deepest_discharge = consumed
+
+                    if self.jk.hist_min_voltage is None or self.jk.voltage < self.jk.hist_min_voltage:
+                        self.jk.hist_min_voltage = self.jk.voltage
+                    if self.jk.hist_max_voltage is None or self.jk.voltage > self.jk.hist_max_voltage:
+                        self.jk.hist_max_voltage = self.jk.voltage
+
+                    avg_discharge = (
+                        self.jk.cycle_charge / self.jk.cycles
+                        if self.jk.cycles > 0 else 0.0
+                    )
 
                     GLib.idle_add(self._dbus_commit, {
-                        "/Alarms/InternalFailure": 0,
-                        "/Dc/0/Voltage":           self.jk.voltage,
-                        "/Dc/0/Power":             self.jk.power,
-                        "/Dc/0/Current":           self.jk.current,
-                        "/Dc/0/Temperature":       self.jk.temperature,
-                        "/Soc":                    self.jk.soc,
-                        "/TimeToGo":               ttg,
-                        "/ConsumedAmphours":       consumed,
-                        "/History/LastDischarge":  self.jk.hist_last_discharge,
+                        "/Alarms/InternalFailure":          0,
+                        "/Dc/0/Voltage":                    self.jk.voltage,
+                        "/Dc/0/Power":                      self.jk.power,
+                        "/Dc/0/Current":                    self.jk.current,
+                        "/Dc/0/Temperature":                self.jk.temperature,
+                        "/Soc":                             self.jk.soc,
+                        "/TimeToGo":                        ttg,
+                        "/ConsumedAmphours":                consumed,
+                        # history 
+                        "/History/LastDischarge":           self.jk.hist_last_discharge,
+                        "/History/DeepestDischarge":        self.jk.hist_deepest_discharge,
+                        "/History/MinimumVoltage":          self.jk.hist_min_voltage,
+                        "/History/MaximumVoltage":          self.jk.hist_max_voltage,
+                        "/History/DischargedEnergy":        round(self.jk.hist_discharged_energy, 3),
+                        "/History/ChargedEnergy":           round(self.jk.hist_charged_energy, 3),
+                        "/History/FullDischarges":          self.jk.hist_full_discharges,
+                        "/History/TimeSinceLastFullCharge": time_since_full,
+                        "/History/AverageDischarge":        round(avg_discharge, 3),
+                        # native history from BMS JK
+                        "/History/ChargeCycles":            self.jk.cycles,
+                        "/History/TotalAhDrawn":            self.jk.cycle_charge,
                     })
                     GLib.idle_add(self._increment_update_index)
+
+                    self._save_history()
 
                     logging.debug(
                         "BATTERY UPDATED: SOC %s, V %s",
@@ -233,16 +311,98 @@ class JkMonitorService:
                 if self.jk.missing_updates > 5:
                     self.jk.device = None
 
+
+    def _load_history(self):
+        """
+        Carica la history dal file JSON all'avvio.
+        Se il file non esiste o è corrotto, parte da zero senza crashare.
+        """
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                data = json.load(f)
+            self.jk.hist_last_discharge     = float(data.get("last_discharge",     0.0))
+            self.jk.hist_deepest_discharge  = float(data.get("deepest_discharge",  0.0))
+            self.jk.hist_discharged_energy  = float(data.get("discharged_energy",  0.0))
+            self.jk.hist_charged_energy     = float(data.get("charged_energy",     0.0))
+            self.jk.hist_full_discharges    = int(data.get("full_discharges",      0))
+            self.jk._soc_was_high           = bool(data.get("soc_was_high",        False))
+            min_v = data.get("min_voltage")
+            max_v = data.get("max_voltage")
+            self.jk.hist_min_voltage = float(min_v) if min_v is not None else None
+            self.jk.hist_max_voltage = float(max_v) if max_v is not None else None
+            last_fc = data.get("last_full_charge")
+            self.jk.hist_last_full_charge = (
+                datetime.fromisoformat(last_fc) if last_fc else None
+            )
+            self.jk.cycles         = int(data.get("cycles",         0))
+            self.jk.cycle_charge   = float(data.get("cycle_charge", 0.0))
+            self.jk.battery_health = int(data.get("battery_health", 0))
+            logging.info(
+                "History loaded: last=%.2fAh deepest=%.2fAh "
+                "minV=%s maxV=%s cycles=%d discharged=%.1fWh charged=%.1fWh "
+                "full_discharges=%d health=%d%%",
+                self.jk.hist_last_discharge, self.jk.hist_deepest_discharge,
+                self.jk.hist_min_voltage, self.jk.hist_max_voltage,
+                self.jk.cycles, self.jk.hist_discharged_energy,
+                self.jk.hist_charged_energy, self.jk.hist_full_discharges,
+                self.jk.battery_health,
+            )
+        except FileNotFoundError:
+            logging.info("No history file found, starting from scratch.")
+        except Exception:
+            logging.exception("Error reading history file, starting from scratch.")
+
+    def _save_history(self):
+        """
+        Salva la history su file JSON in modo atomico:
+        scrive su un file temporaneo e poi fa rename,
+        così un crash durante la scrittura non corrompe il file esistente.
+        """
+        tmp = HISTORY_FILE + ".tmp"
+        try:
+            data = {
+                # history 
+                "last_discharge":    self.jk.hist_last_discharge,
+                "deepest_discharge": self.jk.hist_deepest_discharge,
+                "min_voltage":       self.jk.hist_min_voltage,
+                "max_voltage":       self.jk.hist_max_voltage,
+                "discharged_energy": self.jk.hist_discharged_energy,
+                "charged_energy":    self.jk.hist_charged_energy,
+                "full_discharges":   self.jk.hist_full_discharges,
+                "soc_was_high":      self.jk._soc_was_high,
+                "last_full_charge":  (
+                    self.jk.hist_last_full_charge.isoformat()
+                    if self.jk.hist_last_full_charge else None
+                ),
+                # native history
+                "cycles":            self.jk.cycles,
+                "cycle_charge":      self.jk.cycle_charge,
+                "battery_health":    self.jk.battery_health,
+                "last_saved":        datetime.now().isoformat(),
+            }
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, HISTORY_FILE)
+            logging.debug("History saved to %s", HISTORY_FILE)
+        except Exception:
+            logging.exception("Error saving history file")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     def _dbus_set(self, path, value):
+        """Scrive un singolo path dbus. Ritorna False (one-shot idle_add)."""
         self._dbusservice[path] = value
         return False
 
     def _dbus_commit(self, values: dict):
+        """Scrive un dizionario di path dbus in un colpo solo."""
         for path, value in values.items():
             self._dbusservice[path] = value
         return False
 
     def _increment_update_index(self):
+        """Legge e incrementa UpdateIndex (0-255) in modo atomico nel thread GLib."""
         index = self._dbusservice["/UpdateIndex"] + 1
         self._dbusservice["/UpdateIndex"] = index if index <= 255 else 0
         return False
@@ -304,11 +464,11 @@ class JkMonitorService:
                 # estrai hciN dal path DBus
                 for part in path.split("/"):
                     if part.startswith("hci"):
-                        logging.info("BLE adapter found: %s", part)
+                        logging.info("BLE adapter detected: %s", part)
                         return part
         except Exception as e:
-            logging.warning("cannot find BLE adapter: %s", e)
-        logging.warning("cannot find BLE adapter, using fallback hci0")
+            logging.warning("Could not determine BLE adapter: %s", e)
+        logging.warning("BLE adapter could not be determined, falling back to hci0")
         return "hci0"
 
     def _restart_ble_hardware_sync(self, adapter: str):
@@ -330,7 +490,7 @@ class JkMonitorService:
         )
 
     def _restart_bluetooth_sync(self, adapter: str):
-        logging.warning("*** Tentativo riavvio demone Bluetooth su %s ***", adapter)
+        logging.warning("*** Attempting Bluetooth daemon restart on %s ***", adapter)
         try:
             subprocess.run(['pkill', 'unblock'], timeout=5)
             sleep(5)
@@ -338,14 +498,14 @@ class JkMonitorService:
             sleep(5)
             result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
             if result.returncode == 0:
-                logging.info("Bluetooth successfuly restarted for %s.", adapter)
+                logging.info("Bluetooth successfully restarted on %s.", adapter)
                 sleep(3)
                 return True
             else:
-                logging.error(f"Error restarting Bluetooth: {result.stderr}")
+                logging.error("Bluetooth restart error: %s", result.stderr)
                 return False
         except Exception as e:
-            logging.exception(f"Bluetooth restart exception: {e}")
+            logging.exception("Exception during Bluetooth restart: %s", e)
             return False
 
     async def restart_bluetooth_service(self):
@@ -386,18 +546,18 @@ def main():
             "/Settings/MonitorMode":            {"initial": 0},
             "/Alarms/LowSoc":                   {"initial": 0},
             "/Alarms/InternalFailure":          {"initial": 0},
-            "/History/DeepestDischarge":        {"initial": None},
-            "/History/LastDischarge":           {"initial": None},
-            "/History/AverageDischarge":        {"initial": None},
-            "/History/ChargeCycles":            {"initial": None},
-            "/History/FullDischarges":          {"initial": None},
-            "/History/TotalAhDrawn":            {"initial": None},
-            "/History/MinimumVoltage":          {"initial": None},
-            "/History/MaximumVoltage":          {"initial": None},
-            "/History/TimeSinceLastFullCharge": {"initial": None},
-            "/History/AutomaticSyncs":          {"initial": None},
-            "/History/DischargedEnergy":        {"initial": None},
-            "/History/ChargedEnergy":           {"initial": None},
+            "/History/DeepestDischarge":        {"initial": 0},
+            "/History/LastDischarge":           {"initial": 0},
+            "/History/AverageDischarge":        {"initial": 0},
+            "/History/ChargeCycles":            {"initial": 0},
+            "/History/FullDischarges":          {"initial": 0},
+            "/History/TotalAhDrawn":            {"initial": 0},
+            "/History/MinimumVoltage":          {"initial": 0},
+            "/History/MaximumVoltage":          {"initial": 0},
+            "/History/TimeSinceLastFullCharge": {"initial": 0},
+            "/History/AutomaticSyncs":          {"initial": 0},
+            "/History/DischargedEnergy":        {"initial": 0},
+            "/History/ChargedEnergy":           {"initial": 0},
         },
         config=config,
     )
