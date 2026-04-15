@@ -38,6 +38,9 @@ class JkConfig:
             return 1
         else:
             return interval
+        
+    def get_soc_detection_voltage(self):
+        return float(self.config.get("Setup", "SocDetectionVoltage", fallback=14.1))
 
     def get_battery_capacity(self):
         return float(self.config.get("Setup", "BatteryCapacity", fallback=50)) 
