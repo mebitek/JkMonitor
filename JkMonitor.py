@@ -251,6 +251,7 @@ class JkMonitorService:
                 self.jk.bms_soc     = data['battery_level']
                 if self.jk.voltage >= self.config.get_soc_detection_voltage():
                     self.jk.soc = 100
+                    self.jk.automatic_syncs = self.jk.automatic_syncs + 1
                 self.jk.temperature = data['temperature']
                
 
@@ -281,7 +282,6 @@ class JkMonitorService:
                 # -- TimeSinceLastFullCharge --
                 if self.jk.soc >= 100:
                     self.jk.hist_last_full_charge = datetime.now()
-                    self.jk.automatic_syncs = self.jk.automatic_syncs + 1
                 time_since_full = 0
                 if self.jk.hist_last_full_charge is not None:
                     time_since_full = int(
