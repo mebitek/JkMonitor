@@ -78,6 +78,7 @@ class JkBms:
         # BLE device and adapter cache
         self.device       = None
         self.adapter: str = "hci0"   # cached adapter, updated when device is found
+        self.low_soc_alarm = 0
 
 
 class JkMonitorService:
@@ -248,7 +249,12 @@ class JkMonitorService:
                 self.jk.voltage     = data['voltage']
                 self.jk.current     = data['current']
                 self.jk.power       = data['power']
-                self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
+                self.jk.soc         = min(100.0, round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2))
+
+                if self.jk.soc < 30:
+                    self.jk.low_soc_alarm = 1
+                if self.jk.soc > 50 and self.jk.low_soc_alarm == 1:
+                    self.jk.low_soc_alarm = 0
                 self.jk.bms_soc     = data['battery_level']
                 if self.jk.voltage >= self.config.get_soc_detection_voltage():
                     self.jk.soc = 100    
@@ -347,12 +353,13 @@ class JkMonitorService:
                     "/History/TimeSinceLastFullCharge": time_since_full,
                     "/History/AverageDischarge":        round(avg_discharge, 3),
                     "/History/AutomaticSyncs":          self.jk.automatic_syncs,
-                    "/History/TotalAhDrawn":            self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
+                    "/History/TotalAhDrawn":            total_drawn,
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
                     #debug
                     "/RemainingCapacity":               self.jk.cycle_charge,
-                    "/BmsSoc":                          self.jk.bms_soc
+                    "/BmsSoc":                          self.jk.bms_soc,
+                    "/Alarms/LowSoc":                   self.jk.low_soc_alarm
                 })
                 GLib.idle_add(self._increment_update_index)
 
@@ -509,6 +516,7 @@ class JkMonitorService:
         elif reg_id == JkReg.VE_REG_LOW_SOC_CLEAR.value:
             decimal = utils.convert_to_decimal(bytearray(data))
             self.config.write_to_config(decimal, "Setup", "LowSocAlarmClear")
+        self.config = JkConfig()
         return GenericReg.OK.value, data
 
     def remaining_time_seconds(self, capacity, soc, current_a):
@@ -563,7 +571,7 @@ class JkMonitorService:
         """Blocking — must only be called via run_in_executor."""
         logging.warning("*** Attempting Bluetooth daemon restart on %s ***", adapter)
         try:
-            subprocess.run(['pkill', 'unblock'], timeout=5)
+            subprocess.run(['rfkill', 'unblock', 'bluetooth'], timeout=5)
             sleep(5)
             subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
             sleep(5)
