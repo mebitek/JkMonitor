@@ -249,7 +249,7 @@ class JkMonitorService:
                 self.jk.power       = data['power']
                 self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
                 self.jk.bms_soc     = data['battery_level']
-                if int(data['battery_level']) == 100 and self.jk.voltage > 14.1:
+                if self.jk.voltage > 14.1:
                     self.jk.soc = 100
                 self.jk.temperature = data['temperature']
                
@@ -311,7 +311,7 @@ class JkMonitorService:
                     self.jk.hist_max_voltage = self.jk.voltage
 
                 # total ah drawn
-                total_drawn = self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2),
+                total_drawn = self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2)
 
                 # -- AverageDischarge: cycle_charge / cycles (native from BMS) --
                 avg_discharge = (
