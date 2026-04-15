@@ -311,7 +311,8 @@ class JkMonitorService:
                     self.jk.hist_max_voltage = self.jk.voltage
 
                 # total ah drawn
-                total_drawn = self.jk.hist_discharged_energy / ((self.jk.hist_min_voltage+self.jk.hist_max_voltage)/2)
+                avg_voltage = (self.jk.hist_min_voltage + self.jk.hist_max_voltage) / 2 if (self.jk.hist_min_voltage and self.jk.hist_max_voltage) else 12.8
+                total_drawn = self.jk.hist_discharged_energy / avg_voltage
 
                 # -- AverageDischarge: cycle_charge / cycles (native from BMS) --
                 avg_discharge = (
