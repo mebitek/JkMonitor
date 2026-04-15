@@ -73,6 +73,7 @@ class JkBms:
         # last full charge timestamp
         self.hist_last_full_charge: datetime | None = None
         self.last_update: datetime | None       = None
+        self.last_sync_time: datetime | None = None
         self.missing_updates = 0
         # BLE device and adapter cache
         self.device       = None
@@ -250,8 +251,14 @@ class JkMonitorService:
                 self.jk.soc         = round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2)
                 self.jk.bms_soc     = data['battery_level']
                 if self.jk.voltage >= self.config.get_soc_detection_voltage():
-                    self.jk.soc = 100
-                    self.jk.automatic_syncs = self.jk.automatic_syncs + 1
+                    self.jk.soc = 100    
+                    if self.jk.last_sync_time is None:
+                        self.jk.automatic_syncs = self.jk.automatic_syncs + 1
+                        self.jk.last_sync_time = datetime.now()
+                    else:
+                        if self.jk.last_sync_time < datetime.now() - timedelta(minutes=60):
+                            self.jk.automatic_syncs = self.jk.automatic_syncs + 1
+                            self.jk.last_sync_time = datetime.now()
                 self.jk.temperature = data['temperature']
                
 
