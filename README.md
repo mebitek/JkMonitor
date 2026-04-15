@@ -15,6 +15,7 @@ you need to install via pip the `aiobmsble`
     - `Serial`: device serial 
     - `Model`: jk bms model
     - `Interval`: interval to query the jk bms
+    - `SocDetectionVoltage`: 100% soc detection voltage - use 0.1 less the absorbtion voltage
     - `BatteryCapacity`: battery capacity in ah
     - `debug`: set log level to debug
 
