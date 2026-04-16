@@ -1,4 +1,4 @@
-# venus.JK Monitor v1.2.0
+# venus.JK Monitor v1.2.1
 Service to integrate a jk bms  into cerbos gui
 
 The script has been developed with my current RV setup in mind.

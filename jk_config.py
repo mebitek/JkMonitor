@@ -42,6 +42,12 @@ class JkConfig:
     def get_soc_detection_voltage(self):
         return float(self.config.get("Setup", "SocDetectionVoltage", fallback=14.1))
 
+    def get_low_voltage_alarm(self):
+        return float(self.config.get("Setup", "LowVoltageAlarm", fallback=10.8))
+
+    def get_high_voltage_alarm(self):
+        return float(self.config.get("Setup", "HighVoltageAlarm", fallback=14.8))
+
     def get_battery_capacity(self):
         return float(self.config.get("Setup", "BatteryCapacity", fallback=50)) 
 

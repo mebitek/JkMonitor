@@ -79,6 +79,8 @@ class JkBms:
         self.device       = None
         self.adapter: str = "hci0"   # cached adapter, updated when device is found
         self.low_soc_alarm = 0
+        self.low_voltage_alarm = 0
+        self.high_voltage_alarm = 0
 
 
 class JkMonitorService:
@@ -251,10 +253,19 @@ class JkMonitorService:
                 self.jk.power       = data['power']
                 self.jk.soc         = min(100.0, round((data['cycle_charge'] * 100) / self.config.get_battery_capacity(), 2))
 
-                if self.jk.soc < 30:
+                if self.jk.soc < self.config.get_low_soc_alarm_set():
                     self.jk.low_soc_alarm = 1
-                if self.jk.soc > 50 and self.jk.low_soc_alarm == 1:
+                if self.jk.soc > self.config.get_low_soc_alarm_clear() and self.jk.low_soc_alarm == 1:
                     self.jk.low_soc_alarm = 0
+
+                if self.jk.voltage < 10.8:
+                    self.jk.low_voltage_alarm = 1
+                elif self.jk.voltage > 14.6:
+                    self.jk.high_voltage_alarm = 1
+                else:
+                    self.jk.low_voltage_alarm = 0
+                    self.jk.high_voltage_alarm = 0
+                
                 self.jk.bms_soc     = data['battery_level']
                 if self.jk.voltage >= self.config.get_soc_detection_voltage():
                     self.jk.soc = 100
@@ -277,6 +288,8 @@ class JkMonitorService:
                         if self.jk.last_sync_time < datetime.now() - timedelta(minutes=60):
                             self.jk.automatic_syncs += 1
                             self.jk.last_sync_time = datetime.now()
+                else:
+                    self.jk.last_sync_time = None
 
                 ttg        = self.remaining_time_seconds(capacityAh, self.jk.soc, self.jk.current)
 
@@ -364,6 +377,8 @@ class JkMonitorService:
                     "/RemainingCapacity":               self.jk.cycle_charge,
                     "/BmsSoc":                          self.jk.bms_soc,
                     "/Alarms/LowSoc":                   self.jk.low_soc_alarm,
+                    "/Alarms/LowVoltage":               self.jk.low_voltage_alarm,
+                    "/Alarms/HighVoltage":              self.jk.high_voltage_alarm,
                     "/LastSyncTime":                    last_sync_time_str
                 })
                 GLib.idle_add(self._increment_update_index)
@@ -630,6 +645,8 @@ def main():
             "/Settings/MonitorMode":            {"initial": 0},
             "/Alarms/LowSoc":                   {"initial": 0},
             "/Alarms/InternalFailure":          {"initial": 0},
+            "/Alarms/LowVoltage":               {"initial": 0},
+            "/Alarms/HighVoltage":              {"initial": 0},
             "/History/DeepestDischarge":        {"initial": 0},
             "/History/LastDischarge":           {"initial": 0},
             "/History/AverageDischarge":        {"initial": 0},
