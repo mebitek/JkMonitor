@@ -16,6 +16,10 @@ you need to install via pip the `aiobmsble`
     - `Model`: jk bms model
     - `Interval`: interval to query the jk bms
     - `SocDetectionVoltage`: 100% soc detection voltage - use 0.1 less the absorbtion voltage
+    - `LowSocAlarmSet`: low soc alarm threshold
+    - `LowSocAlarmClear`: low soc alarm clear threshold
+    - `LowVoltageAlarm`: low voltage alarm threshold
+    - `HighVoltageAlarm`: high voltage alaem threshold
     - `BatteryCapacity`: battery capacity in ah
     - `debug`: set log level to debug
 
