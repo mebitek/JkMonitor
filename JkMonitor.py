@@ -260,11 +260,11 @@ class JkMonitorService:
                 if self.jk.soc > self.config.get_low_soc_alarm_clear() and self.jk.low_soc_alarm == 1:
                     self.jk.low_soc_alarm = 0
 
-                if self.jk.voltage < 10.8:
+                if self.jk.voltage < self.config.get_low_voltage_alarm():
                     if self.jk.low_voltage_alarm == 0:
                         self.jk.hist_low_voltage_alarms += 1
                     self.jk.low_voltage_alarm = 1
-                elif self.jk.voltage > 14.6:
+                elif self.jk.voltage > self.config.get_high_voltage_alarm():
                     if self.jk.high_voltage_alarm == 0:
                         self.jk.hist_high_voltage_alarms += 1
                     self.jk.high_voltage_alarm = 1
