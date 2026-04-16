@@ -82,6 +82,9 @@ class JkBms:
         self.low_voltage_alarm = 0
         self.high_voltage_alarm = 0
 
+        self.hist_low_voltage_alarms = 0
+        self.hist_high_voltage_alarms = 0
+
 
 class JkMonitorService:
     def __init__(
@@ -260,8 +263,10 @@ class JkMonitorService:
 
                 if self.jk.voltage < 10.8:
                     self.jk.low_voltage_alarm = 1
+                    self.jk.hist_low_voltage_alarms += 1
                 elif self.jk.voltage > 14.6:
                     self.jk.high_voltage_alarm = 1
+                    self.jk.hist_high_voltage_alarms += 1
                 else:
                     self.jk.low_voltage_alarm = 0
                     self.jk.high_voltage_alarm = 0
@@ -371,6 +376,8 @@ class JkMonitorService:
                     "/History/AverageDischarge":        round(avg_discharge, 3),
                     "/History/AutomaticSyncs":          self.jk.automatic_syncs,
                     "/History/TotalAhDrawn":            total_drawn,
+                    "/History/LowVoltageAlarms":        self.jk.hist_low_voltage_alarms,
+                    "/History/HighVoltageAlarms":       self.jk.hist_high_voltage_alarms,
                     # native history from BMS
                     "/History/ChargeCycles":            self.jk.cycles,
                     #debug
@@ -423,6 +430,8 @@ class JkMonitorService:
             self.jk.cycles         = int(data.get("cycles",         0))
             self.jk.cycle_charge   = float(data.get("cycle_charge", 0.0))
             self.jk.battery_health = int(data.get("battery_health", 0))
+            self.jk.hist_low_voltage_alarms = int(data.get("low_voltage_alarms", 0))
+            self.jk.hist_high_voltage_alarms = int(data.get("high_voltage_alarms", 0))
             logging.info(
                 "History loaded: last=%.2fAh deepest=%.2fAh "
                 "minV=%s maxV=%s cycles=%d discharged=%.1fWh charged=%.1fWh "
@@ -461,6 +470,8 @@ class JkMonitorService:
                 "cycle_charge":      self.jk.cycle_charge,
                 "battery_health":    self.jk.battery_health,
                 "last_saved":        datetime.now().isoformat(),
+                "low_voltage_alarms": self.jk.hist_low_voltage_alarms,
+                "high_voltage_alarms": self.jk.hist_high_voltage_alarms
             }
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
