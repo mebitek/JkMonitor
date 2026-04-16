@@ -294,7 +294,8 @@ class JkMonitorService:
                         if self.jk.last_sync_time < datetime.now() - timedelta(minutes=60):
                             self.jk.automatic_syncs += 1
                             self.jk.last_sync_time = datetime.now()
-                else:
+               
+                if self.jk.soc < 100:
                     self.jk.last_sync_time = None
 
                 ttg        = self.remaining_time_seconds(capacityAh, self.jk.soc, self.jk.current)
