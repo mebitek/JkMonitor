@@ -360,7 +360,7 @@ class JkMonitorService:
                     "/RemainingCapacity":               self.jk.cycle_charge,
                     "/BmsSoc":                          self.jk.bms_soc,
                     "/Alarms/LowSoc":                   self.jk.low_soc_alarm,
-                    "/LastSyncTime":                    self.jk.last_sync_time.strftime("%m/%d/%Y, %H:%M:%S") if not None else "-"
+                    "/LastSyncTime":                    "-"
                 })
                 GLib.idle_add(self._increment_update_index)
 
