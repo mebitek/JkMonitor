@@ -268,7 +268,7 @@ class JkMonitorService:
                 self.jk.delta_voltage  = float(data.get('delta_voltage',0.0))
 
                 consumed   = capacityAh * (100 - self.jk.soc) / 100
-                if self.jk.soc == 100 and self.jk.current >= 0:
+                if self.jk.bms_soc == 100 and self.jk.current >= 0:
                     consumed = 0
                     if self.jk.last_sync_time is None:
                         self.jk.automatic_syncs += 1
