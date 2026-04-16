@@ -36,7 +36,6 @@ sys.path.insert(1, "/data/SetupHelper/velib_python")
 from vedbus import VeDbusService, VeDbusItemImport
 from gi.repository import GLib
 from vreg_link_item import VregLinkItem, GenericReg, JkReg
-from settingsdevice import SettingsDevice
 
 from jk_config import JkConfig
 
