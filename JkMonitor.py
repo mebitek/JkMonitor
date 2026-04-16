@@ -359,7 +359,8 @@ class JkMonitorService:
                     #debug
                     "/RemainingCapacity":               self.jk.cycle_charge,
                     "/BmsSoc":                          self.jk.bms_soc,
-                    "/Alarms/LowSoc":                   self.jk.low_soc_alarm
+                    "/Alarms/LowSoc":                   self.jk.low_soc_alarm,
+                    "/LastSyncTime":                    self.jk.last_sync_time
                 })
                 GLib.idle_add(self._increment_update_index)
 
@@ -641,6 +642,7 @@ def main():
             "/History/HighVoltageAlarms":       {"initial": 0},
             "/RemainingCapacity":               {"initial": 0},
             "/BmsSoc":                          {"initial": 0},
+            "/LastSyncTime":                    {"initial": 0}
         },
         config=config,
     )
