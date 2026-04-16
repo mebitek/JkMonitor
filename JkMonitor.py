@@ -257,14 +257,17 @@ class JkMonitorService:
                     self.jk.low_soc_alarm = 0
                 self.jk.bms_soc     = data['battery_level']
                 if self.jk.voltage >= self.config.get_soc_detection_voltage():
-                    self.jk.soc = 100    
+                    self.jk.soc = 100
                     if self.jk.last_sync_time is None:
-                        self.jk.automatic_syncs = self.jk.automatic_syncs + 1
+                        self.jk.automatic_syncs += 1
                         self.jk.last_sync_time = datetime.now()
                     else:
                         if self.jk.last_sync_time < datetime.now() - timedelta(minutes=60):
-                            self.jk.automatic_syncs = self.jk.automatic_syncs + 1
+                            self.jk.automatic_syncs += 1
                             self.jk.last_sync_time = datetime.now()
+                else:
+                    # Reset so the next time voltage hits the threshold it counts as a new sync
+                    self.jk.last_sync_time = None
                 self.jk.temperature = data['temperature']
                
 
