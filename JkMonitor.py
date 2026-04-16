@@ -332,6 +332,10 @@ class JkMonitorService:
                     total_drawn / self.jk.automatic_syncs if self.jk.automatic_syncs > 0 else 0.0
                 )
 
+                last_sync_time_str = '-'
+                if self.jk.last_sync_time is not None:
+                    last_sync_time_str = self.jk.last_sync_time.strftime("%m/%d/%Y, %H:%M:%S")
+
                 # Push all values to dbus in the GLib thread
                 GLib.idle_add(self._dbus_commit, {
                     "/Alarms/InternalFailure":          0,
@@ -360,7 +364,7 @@ class JkMonitorService:
                     "/RemainingCapacity":               self.jk.cycle_charge,
                     "/BmsSoc":                          self.jk.bms_soc,
                     "/Alarms/LowSoc":                   self.jk.low_soc_alarm,
-                    "/LastSyncTime":                    "-"
+                    "/LastSyncTime":                    last_sync_time_str
                 })
                 GLib.idle_add(self._increment_update_index)
 
