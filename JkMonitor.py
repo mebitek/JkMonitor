@@ -14,12 +14,12 @@ import os
 import sys
 import json
 import dbus
-import _thread as thread
 import threading
 import subprocess
 from datetime import datetime, timedelta
 import utils
 from time import sleep
+from typing import Optional
 
 import asyncio
 import logging
@@ -57,12 +57,12 @@ class JkBms:
         self.cycles         = 0
         self.automatic_syncs = 0
         self.battery_health = 0
-        self.delta_voltage  = 0.0
+        self.delta_voltage  = 0.02
         # calculated / persistent history
         self.hist_last_discharge:    float      = 0.0
         self.hist_deepest_discharge: float      = 0.0
-        self.hist_min_voltage: float | None     = None
-        self.hist_max_voltage: float | None     = None
+        self.hist_min_voltage: Optional[float] = None
+        self.hist_max_voltage: Optional[float] = None
         # energy tracking (Wh)
         self.hist_discharged_energy: float      = 0.0
         self.hist_charged_energy:    float      = 0.0
@@ -70,9 +70,9 @@ class JkBms:
         self.hist_full_discharges:   int        = 0
         self._soc_was_high:          bool       = False
         # last full charge timestamp
-        self.hist_last_full_charge: datetime | None = None
-        self.last_update: datetime | None       = None
-        self.last_sync_time: datetime | None = None
+        self.hist_last_full_charge: Optional[datetime] = None
+        self.last_update: Optional[datetime] = None
+        self.last_sync_time: Optional[datetime] = None
         self.missing_updates = 0
         # BLE device and adapter cache
         self.device       = None
@@ -261,11 +261,13 @@ class JkMonitorService:
                     self.jk.low_soc_alarm = 0
 
                 if self.jk.voltage < 10.8:
+                    if self.jk.low_voltage_alarm == 0:
+                        self.jk.hist_low_voltage_alarms += 1
                     self.jk.low_voltage_alarm = 1
-                    self.jk.hist_low_voltage_alarms += 1
                 elif self.jk.voltage > 14.6:
+                    if self.jk.high_voltage_alarm == 0:
+                        self.jk.hist_high_voltage_alarms += 1
                     self.jk.high_voltage_alarm = 1
-                    self.jk.hist_high_voltage_alarms += 1
                 else:
                     self.jk.low_voltage_alarm = 0
                     self.jk.high_voltage_alarm = 0
@@ -632,8 +634,6 @@ def main():
         level = logging.DEBUG
     logging.basicConfig(level=level)
     logging.info(">>>>>>>>>>>>>>>> Jk Monitor Starting <<<<<<<<<<<<<<<<")
-
-    thread.daemon = True
 
     from dbus.mainloop.glib import DBusGMainLoop
     DBusGMainLoop(set_as_default=True)
