@@ -375,7 +375,7 @@ class JkMonitorService:
                     "/History/ChargedEnergy":           round(self.jk.hist_charged_energy/1000, 3),
                     "/History/FullDischarges":          self.jk.hist_full_discharges,
                     "/History/TimeSinceLastFullCharge": time_since_full,
-                    "/History/AverageDischarge":        -round(avg_discharge, 3),
+                    "/History/AverageDischarge":        -(round(avg_discharge, 3)),
                     "/History/AutomaticSyncs":          self.jk.automatic_syncs,
                     "/History/TotalAhDrawn":            -total_drawn,
                     "/History/LowVoltageAlarms":        self.jk.hist_low_voltage_alarms,
