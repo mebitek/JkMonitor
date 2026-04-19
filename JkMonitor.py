@@ -264,7 +264,7 @@ class JkMonitorService:
                     if self.jk.low_voltage_alarm == 0:
                         self.jk.hist_low_voltage_alarms += 1
                     self.jk.low_voltage_alarm = 1
-                elif self.jk.voltage > self.config.get_high_voltage_alarm():
+                elif self.jk.voltage > self.config.get_high_voltage1_alarm():
                     if self.jk.high_voltage_alarm == 0:
                         self.jk.hist_high_voltage_alarms += 1
                     self.jk.high_voltage_alarm = 1
@@ -367,17 +367,17 @@ class JkMonitorService:
                     "/TimeToGo":                        ttg,
                     "/ConsumedAmphours":                consumed,
                     # calculated history
-                    "/History/LastDischarge":           self.jk.hist_last_discharge,
-                    "/History/DeepestDischarge":        self.jk.hist_deepest_discharge,
+                    "/History/LastDischarge":           -self.jk.hist_last_discharge,
+                    "/History/DeepestDischarge":        -self.jk.hist_deepest_discharge,
                     "/History/MinimumVoltage":          self.jk.hist_min_voltage,
                     "/History/MaximumVoltage":          self.jk.hist_max_voltage,
                     "/History/DischargedEnergy":        round(self.jk.hist_discharged_energy/1000, 3),
                     "/History/ChargedEnergy":           round(self.jk.hist_charged_energy/1000, 3),
                     "/History/FullDischarges":          self.jk.hist_full_discharges,
                     "/History/TimeSinceLastFullCharge": time_since_full,
-                    "/History/AverageDischarge":        round(avg_discharge, 3),
+                    "/History/AverageDischarge":        -round(avg_discharge, 3),
                     "/History/AutomaticSyncs":          self.jk.automatic_syncs,
-                    "/History/TotalAhDrawn":            total_drawn,
+                    "/History/TotalAhDrawn":            -total_drawn,
                     "/History/LowVoltageAlarms":        self.jk.hist_low_voltage_alarms,
                     "/History/HighVoltageAlarms":       self.jk.hist_high_voltage_alarms,
                     # native history from BMS
