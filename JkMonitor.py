@@ -178,7 +178,7 @@ class JkMonitorService:
     # ------------------------------------------------------------------
     def _update(self):
         if not self._ble_lock.acquire(blocking=False):
-            logging.warning("BLE update already in progress, skipping cycle.")
+            logging.debug("BLE update already in progress, skipping cycle.")
             return True
 
         future = asyncio.run_coroutine_threadsafe(
@@ -204,7 +204,7 @@ class JkMonitorService:
 
         # 1. Scan for device if not already found
         if self.jk.device is None:
-            logging.info("Searching for device: %s", self.config.get_device_name())
+            logging.debug("Searching for device: %s", self.config.get_device_name())
             try:
                 device = await BleakScanner.find_device_by_name(
                     self.config.get_device_name(), timeout=10.0
@@ -212,9 +212,9 @@ class JkMonitorService:
                 if device:
                     self.jk.device  = device
                     self.jk.adapter = self._detect_adapter(device)
-                    logging.info("Found device: %s (adapter: %s)", device.address, self.jk.adapter)
+                    logging.debug("Found device: %s (adapter: %s)", device.address, self.jk.adapter)
                 else:
-                    logging.warning("Device not found yet...")
+                    logging.debug("Device not found yet...")
                     return
             except Exception as e:
                 logging.error("Error during scan: %s", e)
@@ -329,7 +329,7 @@ class JkMonitorService:
                 if self.jk._soc_was_high and self.jk.soc <= SOC_LOW:
                     self.jk.hist_full_discharges += 1
                     self.jk._soc_was_high = False
-                    logging.info("Full discharge detected (#%d)", self.jk.hist_full_discharges)
+                    logging.debug("Full discharge detected (#%d)", self.jk.hist_full_discharges)
 
                 # -- LastDischarge / DeepestDischarge --
                 if consumed > 0:
@@ -434,7 +434,7 @@ class JkMonitorService:
             self.jk.battery_health = int(data.get("battery_health", 0))
             self.jk.hist_low_voltage_alarms = int(data.get("low_voltage_alarms", 0))
             self.jk.hist_high_voltage_alarms = int(data.get("high_voltage_alarms", 0))
-            logging.info(
+            logging.debug(
                 "History loaded: last=%.2fAh deepest=%.2fAh "
                 "minV=%s maxV=%s cycles=%d discharged=%.1fWh charged=%.1fWh "
                 "full_discharges=%d health=%d%%",
@@ -445,7 +445,7 @@ class JkMonitorService:
                 self.jk.battery_health,
             )
         except FileNotFoundError:
-            logging.info("No history file found, starting from scratch.")
+            logging.debug("No history file found, starting from scratch.")
         except Exception:
             logging.exception("Error reading history file, starting from scratch.")
 
@@ -575,7 +575,7 @@ class JkMonitorService:
             path = device.details.get("path", "") or str(device.details)
             for part in path.split("/"):
                 if part.startswith("hci"):
-                    logging.info("BLE adapter detected: %s", part)
+                    logging.debug("BLE adapter detected: %s", part)
                     return part
         except Exception as e:
             logging.warning("Could not determine BLE adapter: %s", e)
@@ -584,13 +584,13 @@ class JkMonitorService:
 
     def _restart_ble_hardware_sync(self, adapter: str):
         """Blocking — must only be called via run_in_executor."""
-        logging.info("*** Restarting BLE hardware on %s ***", adapter)
+        logging.debug("*** Restarting BLE hardware on %s ***", adapter)
         for cmd, label in [
             (["bluetoothctl", "--adapter", adapter, "power", "off"], "power off"),
             (["bluetoothctl", "--adapter", adapter, "power", "on"],  "power on"),
         ]:
             result = subprocess.run(cmd, capture_output=True, text=True)
-            logging.info("%s exit code: %d  output: %s", label, result.returncode, result.stdout.strip())
+            logging.debug("%s exit code: %d  output: %s", label, result.returncode, result.stdout.strip())
             if label == "power off":
                 sleep(5)
 
@@ -610,7 +610,7 @@ class JkMonitorService:
             sleep(5)
             result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
             if result.returncode == 0:
-                logging.info("Bluetooth successfully restarted on %s.", adapter)
+                logging.debug("Bluetooth successfully restarted on %s.", adapter)
                 sleep(3)
                 return True
             else:
