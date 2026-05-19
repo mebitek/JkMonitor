@@ -365,7 +365,7 @@ class JkMonitorService:
                     "/Dc/0/Temperature":                self.jk.temperature,
                     "/Soc":                             self.jk.soc,
                     "/TimeToGo":                        ttg,
-                    "/ConsumedAmphours":                consumed,
+                    "/ConsumedAmphours":                -consumed,
                     # calculated history
                     "/History/LastDischarge":           -self.jk.hist_last_discharge,
                     "/History/DeepestDischarge":        -self.jk.hist_deepest_discharge,
