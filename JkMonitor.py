@@ -402,6 +402,7 @@ class JkMonitorService:
         except Exception as e:
             logging.error("Failed to update BMS: %s", e)
             self.jk.missing_updates += 1
+            sleep(5)
             #if self.jk.missing_updates > 5:
             #    self.jk.device = None
 
