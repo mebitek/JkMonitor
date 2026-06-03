@@ -226,7 +226,7 @@ class JkMonitorService:
             #current_alarm = self._dbusservice["/Alarms/InternalFailure"]
             #if self.jk.missing_updates > 20:
             #    if current_alarm != 2:
-                    G#Lib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
+                    #GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
             await self.restart_bluetooth_service()
             #else:
             #    if current_alarm != 1:
