@@ -218,20 +218,20 @@ class JkMonitorService:
                     return
             except Exception as e:
                 logging.error("Error during scan: %s", e)
-                await self.restart_bluetooth_service()
+                await self.restart_ble_hardware_and_bluez_driver()
                 return
 
         # 2. Handle alarms — uses cached adapter, never reads a None device
-        if self.jk.missing_updates > 20:
-            #current_alarm = self._dbusservice["/Alarms/InternalFailure"]
-            #if self.jk.missing_updates > 20:
-            #    if current_alarm != 2:
-                    #GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
-            await self.restart_bluetooth_service()
-            #else:
-            #    if current_alarm != 1:
-            #        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
-            #        await self.restart_bluetooth_service()
+        if self.jk.missing_updates > 10:
+            current_alarm = self._dbusservice["/Alarms/InternalFailure"]
+            if self.jk.missing_updates > 20:
+                if current_alarm != 2:
+                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
+                    await self.restart_ble_hardware_and_bluez_driver()
+            else:
+                if current_alarm != 1:
+                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
+                    await self.restart_bluetooth_service()
 
         # 3. Respect the configured read interval
         if self.jk.last_update is not None and datetime.now() <= self.jk.last_update + timedelta(
@@ -402,9 +402,8 @@ class JkMonitorService:
         except Exception as e:
             logging.error("Failed to update BMS: %s", e)
             self.jk.missing_updates += 1
-            sleep(5)
-            #if self.jk.missing_updates > 5:
-            #    self.jk.device = None
+            if self.jk.missing_updates > 5:
+                self.jk.device = None
 
     # ------------------------------------------------------------------
     # History persistence
@@ -583,23 +582,40 @@ class JkMonitorService:
         logging.warning("BLE adapter could not be determined, falling back to hci0")
         return "hci0"
 
+    def _restart_ble_hardware_sync(self, adapter: str):
+        """Blocking — must only be called via run_in_executor."""
+        logging.debug("*** Restarting BLE hardware on %s ***", adapter)
+        for cmd, label in [
+            (["bluetoothctl", "--adapter", adapter, "power", "off"], "power off"),
+            (["bluetoothctl", "--adapter", adapter, "power", "on"],  "power on"),
+        ]:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            logging.debug("%s exit code: %d  output: %s", label, result.returncode, result.stdout.strip())
+            if label == "power off":
+                sleep(5)
+
+    async def restart_ble_hardware_and_bluez_driver(self):
+        """Non-blocking: delegates to a thread via run_in_executor."""
+        await self._async_loop.run_in_executor(
+            None, self._restart_ble_hardware_sync, self.jk.adapter
+        )
 
     def _restart_bluetooth_sync(self, adapter: str):
         """Blocking — must only be called via run_in_executor."""
         logging.warning("*** Attempting Bluetooth daemon restart on %s ***", adapter)
         try:
-            subprocess.run(['bluetoothctl', 'power', 'off'], timeout=5)
-            sleep(5)
-            subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
-            sleep(5)
-            subprocess.run(['rfkill', 'block', 'bluetooth'], timeout=5)
-            sleep(5)
             subprocess.run(['rfkill', 'unblock', 'bluetooth'], timeout=5)
             sleep(5)
-            subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
+            subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
             sleep(5)
-            self.jk.device = None
-            sleep(10)
+            result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
+            if result.returncode == 0:
+                logging.debug("Bluetooth successfully restarted on %s.", adapter)
+                sleep(3)
+                return True
+            else:
+                logging.error("Bluetooth restart error: %s", result.stderr)
+                return False
         except Exception as e:
             logging.exception("Exception during Bluetooth restart: %s", e)
             return False
