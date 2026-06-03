@@ -222,16 +222,16 @@ class JkMonitorService:
                 return
 
         # 2. Handle alarms — uses cached adapter, never reads a None device
-        if self.jk.missing_updates > 10:
-            current_alarm = self._dbusservice["/Alarms/InternalFailure"]
-            if self.jk.missing_updates > 20:
-                if current_alarm != 2:
-                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
-                    await self.restart_bluetooth_service()
-            else:
-                if current_alarm != 1:
-                    GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
-                    await self.restart_bluetooth_service()
+        if self.jk.missing_updates > 20:
+            #current_alarm = self._dbusservice["/Alarms/InternalFailure"]
+            #if self.jk.missing_updates > 20:
+            #    if current_alarm != 2:
+                    G#Lib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
+            await self.restart_bluetooth_service()
+            #else:
+            #    if current_alarm != 1:
+            #        GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
+            #        await self.restart_bluetooth_service()
 
         # 3. Respect the configured read interval
         if self.jk.last_update is not None and datetime.now() <= self.jk.last_update + timedelta(
