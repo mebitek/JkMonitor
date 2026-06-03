@@ -587,8 +587,8 @@ class JkMonitorService:
         """Blocking — must only be called via run_in_executor."""
         logging.debug("*** Restarting BLE hardware on %s ***", adapter)
         for cmd, label in [
-            (["bluetoothctl", "--adapter", adapter, "power", "off"], "power off"),
-            (["bluetoothctl", "--adapter", adapter, "power", "on"],  "power on"),
+            (["bluetoothctl",  "power", "off"], "power off"),
+            (["bluetoothctl",  "power", "on"],  "power on"),
         ]:
             result = subprocess.run(cmd, capture_output=True, text=True)
             logging.debug("%s exit code: %d  output: %s", label, result.returncode, result.stdout.strip())
@@ -611,7 +611,7 @@ class JkMonitorService:
             sleep(5)
             subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
             sleep(5)
-            result = subprocess.run(['bluetoothctl', '--adapter', adapter, 'power', 'on'], timeout=5)
+            result = subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
             if result.returncode == 0:
                 logging.debug("Bluetooth successfully restarted on %s.", adapter)
                 sleep(3)
