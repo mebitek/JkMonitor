@@ -605,6 +605,7 @@ class JkMonitorService:
                 logging.error("Bluetooth restart error: %s", result.stderr)
                 return False
             self.jk.device = None
+            sleep(10)
         except Exception as e:
             logging.exception("Exception during Bluetooth restart: %s", e)
             return False
