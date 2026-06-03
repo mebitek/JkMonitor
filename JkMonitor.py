@@ -402,8 +402,8 @@ class JkMonitorService:
         except Exception as e:
             logging.error("Failed to update BMS: %s", e)
             self.jk.missing_updates += 1
-            if self.jk.missing_updates > 5:
-                self.jk.device = None
+            #if self.jk.missing_updates > 5:
+            #    self.jk.device = None
 
     # ------------------------------------------------------------------
     # History persistence
@@ -604,6 +604,8 @@ class JkMonitorService:
         """Blocking — must only be called via run_in_executor."""
         logging.warning("*** Attempting Bluetooth daemon restart on %s ***", adapter)
         try:
+            subprocess.run(['rfkill', 'block', 'bluetooth'], timeout=5)
+            sleep(5)
             subprocess.run(['rfkill', 'unblock', 'bluetooth'], timeout=5)
             sleep(5)
             subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
