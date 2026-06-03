@@ -596,14 +596,8 @@ class JkMonitorService:
             sleep(5)
             subprocess.run(['rfkill', 'unblock', 'bluetooth'], timeout=5)
             sleep(5)
-            result = subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
-            if result.returncode == 0:
-                logging.debug("Bluetooth successfully restarted on %s.", adapter)
-                sleep(3)
-                return True
-            else:
-                logging.error("Bluetooth restart error: %s", result.stderr)
-                return False
+            subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
+            sleep(5)
             self.jk.device = None
             sleep(10)
         except Exception as e:
