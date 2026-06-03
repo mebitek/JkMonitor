@@ -218,7 +218,7 @@ class JkMonitorService:
                     return
             except Exception as e:
                 logging.error("Error during scan: %s", e)
-                await self.restart_ble_hardware_and_bluez_driver()
+                await self.restart_bluetooth_service()
                 return
 
         # 2. Handle alarms — uses cached adapter, never reads a None device
@@ -227,7 +227,7 @@ class JkMonitorService:
             if self.jk.missing_updates > 20:
                 if current_alarm != 2:
                     GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 2)
-                    await self.restart_ble_hardware_and_bluez_driver()
+                    await self.restart_bluetooth_service()
             else:
                 if current_alarm != 1:
                     GLib.idle_add(self._dbus_set, "/Alarms/InternalFailure", 1)
@@ -583,33 +583,18 @@ class JkMonitorService:
         logging.warning("BLE adapter could not be determined, falling back to hci0")
         return "hci0"
 
-    def _restart_ble_hardware_sync(self, adapter: str):
-        """Blocking — must only be called via run_in_executor."""
-        logging.debug("*** Restarting BLE hardware on %s ***", adapter)
-        for cmd, label in [
-            (["bluetoothctl",  "power", "off"], "power off"),
-            (["bluetoothctl",  "power", "on"],  "power on"),
-        ]:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            logging.debug("%s exit code: %d  output: %s", label, result.returncode, result.stdout.strip())
-            if label == "power off":
-                sleep(5)
-
-    async def restart_ble_hardware_and_bluez_driver(self):
-        """Non-blocking: delegates to a thread via run_in_executor."""
-        await self._async_loop.run_in_executor(
-            None, self._restart_ble_hardware_sync, self.jk.adapter
-        )
 
     def _restart_bluetooth_sync(self, adapter: str):
         """Blocking — must only be called via run_in_executor."""
         logging.warning("*** Attempting Bluetooth daemon restart on %s ***", adapter)
         try:
+            subprocess.run(['bluetoothctl', 'power', 'off'], timeout=5)
+            sleep(5)
+            subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
+            sleep(5)
             subprocess.run(['rfkill', 'block', 'bluetooth'], timeout=5)
             sleep(5)
             subprocess.run(['rfkill', 'unblock', 'bluetooth'], timeout=5)
-            sleep(5)
-            subprocess.run(['hciconfig', adapter, 'reset'], timeout=5)
             sleep(5)
             result = subprocess.run(['bluetoothctl', 'power', 'on'], timeout=5)
             if result.returncode == 0:
